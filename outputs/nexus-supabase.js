@@ -38,6 +38,19 @@
   function showError(message, title = 'Não foi possível concluir') {
     openModal(title, 'Verifique os dados e tente novamente.', `<p class="form-note">${esc(message)}</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
   }
+  async function restoreEmailConfirmation() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    const accessToken = params.get('access_token');
+    if (!accessToken || !['signup', 'email'].includes(params.get('type'))) return false;
+    const response = await fetch(`${apiUrl}/auth/v1/user`, {
+      headers: { apikey: config.publishableKey, Authorization: `Bearer ${accessToken}` }
+    });
+    if (!response.ok) throw new Error('O link expirou ou já foi utilizado. Entre na sua conta ou peça um novo código.');
+    const user = await response.json();
+    saveSession({ access_token: accessToken, refresh_token: params.get('refresh_token'), token_type: params.get('token_type') || 'bearer', user });
+    history.replaceState(null, '', `${location.pathname}${location.search}`);
+    return true;
+  }
   async function loadAccount() {
     if (!session?.user?.id) { account = null; accountId = null; adminSession = false; return; }
     accountId = session.user.id;
@@ -225,13 +238,18 @@
   }, true);
   document.addEventListener('submit', async event => {
     const form=event.target.closest('form[data-form]');if(!form)return;
-    const kind=form.dataset.form;if(!['register','login','event','edit-event','checkout'].includes(kind))return;
+    const kind=form.dataset.form;if(!['register','verify-signup','login','event','edit-event','checkout'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
     try{
       if(kind==='register'){
-        const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
+        const email=data.email.trim().toLowerCase();
+        const result=await request(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
         if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();}
-        else openModal('Confirme o seu e-mail','Enviámos uma mensagem para concluir o registo.',`<p class="form-note">Depois da confirmação, entre na NEXUS com o e-mail e palavra-passe escolhidos.</p><div class="form-actions"><button class="button button-dark" data-auth="login">Ir para entrar</button></div>`);
+        else openModal('Confirme o seu e-mail','Enviámos um código de confirmação para o seu endereço.',`<form data-form="verify-signup"><div class="field full"><label for="signupEmail">E-mail</label><input id="signupEmail" name="email" type="email" value="${esc(email)}" required readonly></div><div class="field full"><label for="signupToken">Código recebido por e-mail</label><input id="signupToken" name="token" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="Introduza o código"></div><p class="form-note">Se a mensagem tiver um botão ou link de confirmação, também pode abri-lo. Não precisa de inserir o código quando usar o link.</p><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já confirmei · Entrar</button><button class="button button-dark" type="submit">Confirmar e-mail</button></div></form>`);
+      } else if(kind==='verify-signup'){
+        const result=await request('/auth/v1/verify',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),token:data.token.trim(),type:'signup'})},false);
+        if(!result.access_token)throw new Error('O código não confirmou a conta. Verifique-o ou abra o link recebido por e-mail.');
+        saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();
       } else if(kind==='login'){
         const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password})},false);
         saveSession(result);await loadAccount();await loadEvents();modal.close();await openDashboard();
@@ -248,7 +266,7 @@
     }catch(error){showError(error.message);}
   }, true);
   async function initialize(){
-    try{if(session){await loadAccount();}await loadEvents();if(account)await loadOrders();}
+    try{await restoreEmailConfirmation();if(session){await loadAccount();}await loadEvents();if(account)await loadOrders();}
     catch(error){console.error('NEXUS/Supabase:',error);showError(error.message,'Ligação à plataforma');}
   }
   initialize();
