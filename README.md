@@ -12,9 +12,10 @@ Plataforma estática de eventos ligada ao Supabase. A interface atual está em `
 ## Ativação do Supabase
 
 1. O projeto está em `https://supabase.com/dashboard/project/dgxiqvyfbbohqwnrgyuu`.
-2. Definir URL de redirecionamento de autenticação para o domínio Vercel.
-3. Atribuir `admin` à conta do proprietário no SQL Editor, após o registo: `update public.profiles set role = 'admin' where id = (select id from auth.users where email = 'EMAIL_DO_ADMIN');`.
-4. Nunca enviar a chave `service_role` ao browser ou guardá-la no repositório.
+2. Em **Authentication > URL Configuration**, definir o site e redirecionamentos para `https://nexus-eventos-alpha.vercel.app`.
+3. Em **Authentication > Providers > Email**, desligar **Confirm email** para permitir cadastro e entrada imediata sem código ou link. A recuperação de palavra-passe continua a depender de e-mails a funcionar.
+4. Atribuir `admin` à conta do proprietário no SQL Editor, após o registo: `update public.profiles set role = 'admin' where id = (select id from auth.users where email = 'EMAIL_DO_ADMIN');`.
+5. Nunca enviar a chave `service_role` ao browser ou guardá-la no repositório.
 
 ## GitHub e Vercel
 
