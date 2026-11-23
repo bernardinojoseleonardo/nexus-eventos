@@ -8,6 +8,7 @@ Plataforma estática de eventos ligada ao Supabase. A interface atual está em `
 - Vercel: projeto `nexus-eventos` ligado ao GitHub; variáveis públicas do Supabase configuradas.
 - Reservas ficam pendentes. Pagamentos reais e confirmação automática ainda não estão integrados.
 - O papel `admin` deve ser atribuído manualmente a uma conta confiável no SQL Editor do Supabase.
+- O cadastro separa participantes e organizadores. O anúncio público mostra nome, foto de perfil, telefone e imagens do evento; o número do BI fica numa tabela com leitura limitada a administradores.
 
 ## Ativação do Supabase
 
