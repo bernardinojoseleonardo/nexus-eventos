@@ -5,7 +5,7 @@ Plataforma estática de eventos ligada ao Supabase. A interface atual está em `
 ## Estado da integração
 
 - Supabase: projeto `nexus-eventos`, na região `eu-west-1`; migrações aplicadas.
-- Vercel: projeto `nexus-eventos` criado e variáveis públicas do Supabase configuradas. A publicação depende da ligação do repositório.
+- Vercel: projeto `nexus-eventos` ligado ao GitHub; variáveis públicas do Supabase configuradas.
 - Reservas ficam pendentes. Pagamentos reais e confirmação automática ainda não estão integrados.
 - O papel `admin` deve ser atribuído manualmente a uma conta confiável no SQL Editor do Supabase.
 
@@ -18,7 +18,7 @@ Plataforma estática de eventos ligada ao Supabase. A interface atual está em `
 
 ## GitHub e Vercel
 
-Ligar um repositório privado à Vercel para publicar cada push. O build copia `outputs/` para `dist/` e cria `nexus-config.js` com as variáveis de ambiente `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY`.
+O repositório é `bernardinojoseleonardo/nexus-eventos`. A branch `main` publica em produção; cada push gera uma publicação, e branches de pull request geram pré-visualizações. O build copia `outputs/` para `dist/` e cria `nexus-config.js` com as variáveis de ambiente `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY`.
 
 ## Relatórios e comissão
 
