@@ -105,11 +105,13 @@
         <div class="field full"><label for="regPassword">Palavra-passe</label><input id="regPassword" name="password" type="password" minlength="8" autocomplete="new-password" required></div>
       </div><p class="form-note">Será usada a autenticação segura do Supabase. Pode ser necessário confirmar o e-mail.</p>
       <div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já tenho conta</button><button class="button button-dark" type="submit">Criar conta</button></div></form>`);
+    } else if (mode === 'verify') {
+      openModal('Confirmar o seu e-mail', 'Introduza o código enviado quando criou a sua conta.', `<form data-form="verify-signup"><div class="form-grid"><div class="field full"><label for="signupEmail">E-mail</label><input id="signupEmail" name="email" type="email" required autocomplete="email"></div><div class="field full"><label for="signupToken">Código recebido por e-mail</label><input id="signupToken" name="token" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="Introduza o código"></div></div><p class="form-note">Se recebeu um link de confirmação, abra-o diretamente no e-mail.</p><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar a entrar</button><button class="button button-dark" type="submit">Confirmar e-mail</button></div></form>`);
     } else {
       openModal('Entrar na NEXUS', 'Aceda à sua conta de participante ou organizador.', `<form data-form="login"><div class="form-grid">
         <div class="field full"><label for="loginEmail">E-mail</label><input id="loginEmail" name="email" type="email" required autocomplete="email"></div>
         <div class="field full"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password"></div>
-      </div><div class="form-actions"><button type="button" class="button button-outline" data-auth="register">Criar conta</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
+      </div><div class="form-actions"><button type="button" class="button button-outline" data-auth="register">Criar conta</button><button type="button" class="button button-outline" data-auth="verify">Inserir código</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
     }
   }
   openRegistration = () => authForm('register');
