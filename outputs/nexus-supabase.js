@@ -243,7 +243,7 @@
     try{
       if(kind==='register'){
         const email=data.email.trim().toLowerCase();
-        const result=await request(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
+        const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
         if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();}
         else openModal('Confirme o seu e-mail','Enviámos um código de confirmação para o seu endereço.',`<form data-form="verify-signup"><div class="field full"><label for="signupEmail">E-mail</label><input id="signupEmail" name="email" type="email" value="${esc(email)}" required readonly></div><div class="field full"><label for="signupToken">Código recebido por e-mail</label><input id="signupToken" name="token" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="Introduza o código"></div><p class="form-note">Se a mensagem tiver um botão ou link de confirmação, também pode abri-lo. Não precisa de inserir o código quando usar o link.</p><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já confirmei · Entrar</button><button class="button button-dark" type="submit">Confirmar e-mail</button></div></form>`);
       } else if(kind==='verify-signup'){
