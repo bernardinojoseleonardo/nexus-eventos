@@ -38,10 +38,11 @@
   function showError(message, title = 'Não foi possível concluir') {
     openModal(title, 'Verifique os dados e tente novamente.', `<p class="form-note">${esc(message)}</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
   }
-  async function restoreEmailConfirmation() {
+  async function restoreAuthCallback() {
     const params = new URLSearchParams(location.hash.slice(1));
     const accessToken = params.get('access_token');
-    if (!accessToken || !['signup', 'email'].includes(params.get('type'))) return false;
+    const callbackType = params.get('type');
+    if (!accessToken || !['signup', 'email', 'recovery'].includes(callbackType)) return null;
     const response = await fetch(`${apiUrl}/auth/v1/user`, {
       headers: { apikey: config.publishableKey, Authorization: `Bearer ${accessToken}` }
     });
@@ -49,7 +50,7 @@
     const user = await response.json();
     saveSession({ access_token: accessToken, refresh_token: params.get('refresh_token'), token_type: params.get('token_type') || 'bearer', user });
     history.replaceState(null, '', `${location.pathname}${location.search}`);
-    return true;
+    return callbackType;
   }
   async function loadAccount() {
     if (!session?.user?.id) { account = null; accountId = null; adminSession = false; return; }
@@ -59,7 +60,7 @@
     if (!profile) throw new Error('O perfil desta conta não foi encontrado.');
     account = { id: profile.id, email: session.user.email || '', name: profile.full_name || '', phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role };
     adminSession = profile.role === 'admin';
-    const label = document.querySelector('#accountButton span'); if (label) label.textContent = account ? 'A minha conta' : 'Entrar';
+    const label = document.querySelector('#accountButton span'); if (label) label.textContent = account?.name || 'Entrar';
   }
   async function signedImage(path) {
     try {
@@ -105,14 +106,17 @@
         <div class="field full"><label for="regPassword">Palavra-passe</label><input id="regPassword" name="password" type="password" minlength="8" autocomplete="new-password" required></div>
       </div><p class="form-note">Será usada a autenticação segura do Supabase. Pode ser necessário confirmar o e-mail.</p>
       <div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já tenho conta</button><button class="button button-dark" type="submit">Criar conta</button></div></form>`);
-    } else if (mode === 'verify') {
-      openModal('Confirmar o seu e-mail', 'Introduza o código enviado quando criou a sua conta.', `<form data-form="verify-signup"><div class="form-grid"><div class="field full"><label for="signupEmail">E-mail</label><input id="signupEmail" name="email" type="email" required autocomplete="email"></div><div class="field full"><label for="signupToken">Código recebido por e-mail</label><input id="signupToken" name="token" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="Introduza o código"></div></div><p class="form-note">Se recebeu um link de confirmação, abra-o diretamente no e-mail.</p><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar a entrar</button><button class="button button-dark" type="submit">Confirmar e-mail</button></div></form>`);
+    } else if (mode === 'recover') {
+      openModal('Recuperar palavra-passe', 'Enviaremos um link para o e-mail da sua conta.', `<form data-form="password-recovery-request"><div class="field full"><label for="recoveryEmail">E-mail</label><input id="recoveryEmail" name="email" type="email" required autocomplete="email"></div><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar</button><button class="button button-dark" type="submit">Enviar link</button></div></form>`);
     } else {
       openModal('Entrar na NEXUS', 'Aceda à sua conta de participante ou organizador.', `<form data-form="login"><div class="form-grid">
         <div class="field full"><label for="loginEmail">E-mail</label><input id="loginEmail" name="email" type="email" required autocomplete="email"></div>
         <div class="field full"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password"></div>
-      </div><div class="form-actions"><button type="button" class="button button-outline" data-auth="register">Criar conta</button><button type="button" class="button button-outline" data-auth="verify">Inserir código</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
+      </div><div class="form-actions"><button type="button" class="button button-outline" data-auth="register">Criar conta</button><button type="button" class="button button-outline" data-auth="recover">Esqueci a palavra-passe</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
     }
+  }
+  function openPasswordResetForm() {
+    openModal('Criar nova palavra-passe', 'Escolha uma palavra-passe com pelo menos 8 caracteres.', `<form data-form="password-update"><div class="field full"><label for="newPassword">Nova palavra-passe</label><input id="newPassword" name="password" type="password" minlength="8" autocomplete="new-password" required></div><div class="form-actions"><button class="button button-dark" type="submit">Guardar palavra-passe</button></div></form>`);
   }
   openRegistration = () => authForm('register');
   function openLogin() { authForm('login'); }
@@ -240,21 +244,23 @@
   }, true);
   document.addEventListener('submit', async event => {
     const form=event.target.closest('form[data-form]');if(!form)return;
-    const kind=form.dataset.form;if(!['register','verify-signup','login','event','edit-event','checkout'].includes(kind))return;
+    const kind=form.dataset.form;if(!['register','login','password-recovery-request','password-update','event','edit-event','checkout'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
     try{
       if(kind==='register'){
         const email=data.email.trim().toLowerCase();
         const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
         if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();}
-        else openModal('Confirme o seu e-mail','Enviámos um código de confirmação para o seu endereço.',`<form data-form="verify-signup"><div class="field full"><label for="signupEmail">E-mail</label><input id="signupEmail" name="email" type="email" value="${esc(email)}" required readonly></div><div class="field full"><label for="signupToken">Código recebido por e-mail</label><input id="signupToken" name="token" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="Introduza o código"></div><p class="form-note">Se a mensagem tiver um botão ou link de confirmação, também pode abri-lo. Não precisa de inserir o código quando usar o link.</p><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já confirmei · Entrar</button><button class="button button-dark" type="submit">Confirmar e-mail</button></div></form>`);
-      } else if(kind==='verify-signup'){
-        const result=await request('/auth/v1/verify',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),token:data.token.trim(),type:'signup'})},false);
-        if(!result.access_token)throw new Error('O código não confirmou a conta. Verifique-o ou abra o link recebido por e-mail.');
-        saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();
+        else openModal('Confirmação ainda ativa','A conta foi criada, mas o Supabase ainda exige confirmação por e-mail.',`<p class="form-note">Para entrar diretamente após o cadastro, o administrador precisa desativar “Confirm email” nas definições de autenticação do projeto Supabase.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
       } else if(kind==='login'){
         const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password})},false);
         saveSession(result);await loadAccount();await loadEvents();modal.close();await openDashboard();
+      } else if(kind==='password-recovery-request'){
+        await request('/auth/v1/recover',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase()})},false);
+        openModal('Verifique o seu e-mail','Enviámos um link para criar uma nova palavra-passe.',`<p class="form-note">Abra o link neste dispositivo e escolha a nova palavra-passe.</p><div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
+      } else if(kind==='password-update'){
+        await request('/auth/v1/user',{method:'PUT',body:JSON.stringify({password:data.password})});
+        await loadAccount();openModal('Palavra-passe atualizada','A sua conta já pode ser usada normalmente.',`<div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
       } else if(kind==='event'||kind==='edit-event'){
         const id=kind==='edit-event'?form.dataset.eventId:null;await saveEvent(data,id);
       } else if(kind==='checkout'){
@@ -268,7 +274,7 @@
     }catch(error){showError(error.message);}
   }, true);
   async function initialize(){
-    try{await restoreEmailConfirmation();if(session){await loadAccount();}await loadEvents();if(account)await loadOrders();}
+    try{const callbackType=await restoreAuthCallback();if(session){await loadAccount();}await loadEvents();if(account)await loadOrders();if(callbackType==='recovery')openPasswordResetForm();}
     catch(error){console.error('NEXUS/Supabase:',error);showError(error.message,'Ligação à plataforma');}
   }
   initialize();
