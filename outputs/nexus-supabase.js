@@ -62,7 +62,7 @@
     const email = session.user.email || '';
     const fallbackName = session.user.user_metadata?.full_name || email.split('@')[0] || 'Conta';
     const profilePhotoPath = profile.profile_photo_path || '';
-    const identitySubmitted = profile.role === 'organizer' ? await request('/rest/v1/rpc/has_organizer_bi',{method:'POST',body:'{}'}) : false;
+    const identitySubmitted = profile.role !== 'admin' ? await request('/rest/v1/rpc/has_organizer_bi',{method:'POST',body:'{}'}) : false;
     account = { id: profile.id, email, name: profile.full_name || fallbackName, profileHasName:Boolean(profile.full_name||session.user.user_metadata?.full_name), phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role,
       identitySubmitted: Boolean(identitySubmitted), profilePhotoPath,
       profilePhotoUrl: profilePhotoPath ? publicProfilePhoto(profilePhotoPath) : '' };
@@ -153,11 +153,8 @@
   };
   publishEvent = () => {
     if (!account) { authIntent = 'publish'; openLogin(); return; }
-    if (!['organizer','admin'].includes(account.rawRole)) {
-      openModal('Perfil de organizador', 'Anuncie eventos com uma conta de organizador.', `<p class="form-note">A sua conta está registada como participante. Termine a sessão e crie uma conta de organizador para publicar eventos.</p><div class="form-actions"><button class="button button-outline" data-close>Fechar</button><button class="button button-dark" data-action="logout-register">Criar conta de organizador</button></div>`); return;
-    }
     pendingEventImages = [];
-    const organizerFields = account.rawRole === 'organizer' ? `${account.profileHasName ? '' : `<div class="field"><label for="organizerName">Nome do organizador</label><input id="organizerName" name="organizer_name" required maxlength="80" placeholder="O nome que aparecerá no anúncio"></div>`}<div class="field"><label for="organizerContactPhone">Telefone de contacto</label><input id="organizerContactPhone" name="contact_phone" type="tel" value="${esc(account.phone)}" required maxlength="30"></div>
+    const organizerFields = account.rawRole !== 'admin' ? `${account.profileHasName ? '' : `<div class="field"><label for="organizerName">Nome do organizador</label><input id="organizerName" name="organizer_name" required maxlength="80" placeholder="O nome que aparecerá no anúncio"></div>`}<div class="field"><label for="organizerContactPhone">Telefone de contacto</label><input id="organizerContactPhone" name="contact_phone" type="tel" value="${esc(account.phone)}" required maxlength="30"></div>
       ${account.identitySubmitted ? '<p class="form-note full">Dados de identificação recebidos e reservados à administração.</p>' : '<div class="field"><label for="organizerBi">Número do BI</label><input id="organizerBi" name="bi_number" required maxlength="32" autocomplete="off"></div>'}
       <div class="field full"><label for="organizerPhoto">Foto de perfil do organizador</label><input id="organizerPhoto" name="organizer_photo" type="file" accept="image/jpeg,image/png,image/webp" ${account.profilePhotoPath ? '' : 'required'}><span class="help">Esta foto e o telefone aparecem no anúncio. O BI fica reservado à administração.</span>${account.profilePhotoUrl ? `<img src="${esc(account.profilePhotoUrl)}" alt="Foto atual do organizador" style="width:84px;height:84px;object-fit:cover;border-radius:50%;margin-top:8px">` : ''}</div>` : '';
     openModal('Publicar um evento', 'Preencha os dados do evento e as informações do organizador.', `<form data-form="event"><div class="form-grid">
@@ -188,7 +185,7 @@
     }
   }
   async function saveOrganizerDetails(data) {
-    if (account.rawRole !== 'organizer') return { name: account.name, phone: account.phone, photoUrl: account.profilePhotoUrl || '' };
+    if (account.rawRole === 'admin') return { name: account.name, phone: account.phone, photoUrl: account.profilePhotoUrl || '' };
     const name = (data.organizer_name || account.name || '').trim();
     if (!name) throw new Error('Introduza o nome do organizador que aparecerá no anúncio.');
     const phone = (data.contact_phone || '').trim();
