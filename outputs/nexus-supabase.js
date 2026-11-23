@@ -8,6 +8,7 @@
   const sessionKey = 'nexusAuthSession';
   let session = readSession();
   let accountId = null;
+  let authIntent = null;
   const styleFor = category => categoryStyle[category] || categoryStyle.Festas;
   const roleLabel = role => role === 'organizer' ? 'organizador' : role === 'admin' ? 'administrador' : 'participante';
   const currentToken = () => session?.access_token || config.publishableKey;
@@ -58,9 +59,12 @@
     const rows = await request(`/rest/v1/profiles?id=eq.${encodeURIComponent(accountId)}&select=id,full_name,phone,role`);
     const profile = rows?.[0];
     if (!profile) throw new Error('O perfil desta conta não foi encontrado.');
-    account = { id: profile.id, email: session.user.email || '', name: profile.full_name || '', phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role };
+    const email = session.user.email || '';
+    const fallbackName = session.user.user_metadata?.full_name || email.split('@')[0] || 'Conta';
+    account = { id: profile.id, email, name: profile.full_name || fallbackName, phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role };
     adminSession = profile.role === 'admin';
     const label = document.querySelector('#accountButton span'); if (label) label.textContent = account?.name || 'Entrar';
+    const logout = document.getElementById('logoutButton'); if (logout) logout.style.display = account ? 'inline-flex' : 'none';
   }
   async function signedImage(path) {
     try {
@@ -134,7 +138,7 @@
     } catch (error) { showError(error.message); }
   };
   publishEvent = () => {
-    if (!account) { openLogin(); return; }
+    if (!account) { authIntent = 'publish'; openLogin(); return; }
     if (!['organizer','admin'].includes(account.rawRole)) {
       openModal('Perfil de organizador', 'Anuncie eventos com uma conta de organizador.', `<p class="form-note">A sua conta está registada como participante. Termine a sessão e crie uma conta de organizador para publicar eventos.</p><div class="form-actions"><button class="button button-outline" data-close>Fechar</button><button class="button button-dark" data-action="logout-register">Criar conta de organizador</button></div>`); return;
     }
@@ -188,7 +192,7 @@
       <p class="form-note">A reserva fica pendente. Nenhum pagamento será cobrado nesta etapa.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Confirmar reserva</button></div></form>`);
     modalBody.querySelector('#ticketQty').addEventListener('change',e=>{modalBody.querySelector('#orderTotal').value=money(event.price*Number(e.target.value));});
   };
-  checkout = event => { selectedEvent = event; if (!account) { openLogin(); return; } openCheckoutForm(event); };
+  checkout = event => { selectedEvent = event; if (!account) { authIntent = 'checkout'; openLogin(); return; } openCheckoutForm(event); };
   showConfirmation = (title,message,reference) => openModal(title,'',`<div class="success-box"><svg class="icon"><use href="#i-ticket"/></svg><h3>${esc(message)}</h3><p>Guarde esta referência para consultar a reserva.</p><span class="ticket-reference">${esc(reference)}</span></div><div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
   async function adminPanel() {
     if (account?.rawRole !== 'admin') { openLogin(); return; }
@@ -227,10 +231,10 @@
     const actionTarget=event.target.closest('[data-action]'), action=actionTarget?.dataset.action;
     const auth=event.target.closest('[data-auth]')?.dataset.auth;
     if(auth){event.preventDefault();event.stopImmediatePropagation();authForm(auth);return;}
-    if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();account?openDashboard():openLogin();return;}
+    if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();if(!account)openLogin();return;}
     if(event.target.closest('[data-action="publish"]')||['admin-new'].includes(action)){event.preventDefault();event.stopImmediatePropagation();publishEvent();return;}
     if(action==='admin'){event.preventDefault();event.stopImmediatePropagation();adminPanel();return;}
-    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];document.querySelector('#accountButton span').textContent='Entrar';modal.close();return;}
+    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';modal.close();return;}
     if(action==='logout-register'){event.preventDefault();event.stopImmediatePropagation();saveSession(null);account=null;accountId=null;modal.close();openRegistration();return;}
     if(action==='save-commission'){event.preventDefault();event.stopImmediatePropagation();const rate=Number(modalBody.querySelector('#commissionRate')?.value);if(!Number.isFinite(rate)||rate<0||rate>100)return;try{await request('/rest/v1/platform_settings?key=eq.commission_percent',{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({value:rate})});await adminPanel();}catch(error){showError(error.message);}return;}
     if(action==='export-report'){event.preventDefault();event.stopImmediatePropagation();downloadReport();return;}
@@ -250,11 +254,11 @@
       if(kind==='register'){
         const email=data.email.trim().toLowerCase();
         const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
-        if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();account.rawRole==='organizer'?publishEvent():await openDashboard();}
+        if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);authIntent=null;}
         else openModal('Confirmação ainda ativa','A conta foi criada, mas o Supabase ainda exige confirmação por e-mail.',`<p class="form-note">Para entrar diretamente após o cadastro, o administrador precisa desativar “Confirm email” nas definições de autenticação do projeto Supabase.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
       } else if(kind==='login'){
         const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password})},false);
-        saveSession(result);await loadAccount();await loadEvents();modal.close();await openDashboard();
+        saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);authIntent=null;
       } else if(kind==='password-recovery-request'){
         await request('/auth/v1/recover',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase()})},false);
         openModal('Verifique o seu e-mail','Enviámos um link para criar uma nova palavra-passe.',`<p class="form-note">Abra o link neste dispositivo e escolha a nova palavra-passe.</p><div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
