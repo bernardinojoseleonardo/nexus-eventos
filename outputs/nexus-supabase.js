@@ -109,10 +109,10 @@
       status: row.status, createdAt: row.created_at, paidAt: row.paid_at, id: row.id }));
   }
   function authForm(mode) {
+    if (mode === 'register-organizer') mode = 'register-participant';
     if (mode === 'register-participant' || mode === 'register-organizer') {
-      const role = mode === 'register-organizer' ? 'organizer' : 'participant';
-      const accountType = role === 'organizer' ? 'organizador' : 'participante';
-      openModal(`Criar conta de ${accountType}`, role === 'organizer' ? 'Crie a sua conta de organizador para anunciar eventos e vender ingressos.' : 'Crie a sua conta para entrar e comprar ingressos.', `<form data-form="register"><input type="hidden" name="role" value="${role}"><div class="form-grid">
+      const role = 'participant';
+      openModal('Criar conta', 'Crie a sua conta para comprar ingressos e publicar eventos.', `<form data-form="register"><input type="hidden" name="role" value="${role}"><div class="form-grid">
         <div class="field full"><label for="regName">Nome completo</label><input id="regName" name="name" required maxlength="80"></div>
         <div class="field"><label for="regEmail">E-mail</label><input id="regEmail" name="email" type="email" required maxlength="120"></div>
         <div class="field"><label for="regPhone">Telefone</label><input id="regPhone" name="phone" type="tel" maxlength="30"></div>
@@ -122,12 +122,8 @@
     } else if (mode === 'recover') {
       openModal('Recuperar palavra-passe', 'Enviaremos um link para o e-mail da sua conta.', `<form data-form="password-recovery-request"><div class="field full"><label for="recoveryEmail">E-mail</label><input id="recoveryEmail" name="email" type="email" required autocomplete="email"></div><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar</button><button class="button button-dark" type="submit">Enviar link</button></div></form>`);
     } else {
-      const roleChoices = authIntent === 'publish'
-        ? '<button type="button" class="button button-outline" data-auth="register-organizer">Criar conta de organizador</button>'
-        : authIntent === 'checkout'
-          ? '<button type="button" class="button button-outline" data-auth="register-participant">Criar conta de participante</button>'
-          : '<button type="button" class="button button-outline" data-auth="register-participant">Conta de participante</button><button type="button" class="button button-outline" data-auth="register-organizer">Conta de organizador</button>';
-      openModal('Entrar na NEXUS', authIntent === 'publish' ? 'Entre como organizador para publicar o seu evento.' : authIntent === 'checkout' ? 'Entre como participante para comprar ingressos.' : 'Escolha o tipo de conta para aceder à plataforma.', `<form data-form="login"><div class="form-grid">
+      const roleChoices = '<button type="button" class="button button-outline" data-auth="register-participant">Criar conta</button>';
+      openModal('Entrar na NEXUS', authIntent === 'publish' ? 'Entre na sua conta para publicar o evento.' : authIntent === 'checkout' ? 'Entre na sua conta para comprar ingressos.' : 'Entre na sua conta para aceder à plataforma.', `<form data-form="login"><div class="form-grid">
         <div class="field full"><label for="loginEmail">E-mail</label><input id="loginEmail" name="email" type="email" required autocomplete="email"></div>
         <div class="field full"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password"></div>
       </div><div class="form-actions">${roleChoices}<button type="button" class="button button-outline" data-auth="recover">Esqueci a palavra-passe</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
@@ -151,6 +147,18 @@
       openModal('A sua conta', 'Dados e atividade guardados na plataforma.', content);
     } catch (error) { showError(error.message); }
   };
+  async function organizerPanel() {
+    if (!account) { openLogin(); return; }
+    try {
+      const rows = await request('/rest/v1/rpc/get_my_organizer_event_report', { method:'POST', body:'{}' });
+      const events = rows || [];
+      const sold = events.reduce((sum,row)=>sum+Number(row.tickets_sold||0),0);
+      const reserved = events.reduce((sum,row)=>sum+Number(row.tickets_reserved||0),0);
+      const gross = events.reduce((sum,row)=>sum+Number(row.confirmed_gross||0),0);
+      const reportRows = events.length ? events.map(row=>`<tr><td><strong>${esc(row.title)}</strong><small style="display:block;color:#68766d;margin-top:4px">${row.starts_at?formatDate(row.starts_at):'Data por definir'}</small></td><td>${row.tickets_sold}</td><td>${row.tickets_reserved}</td><td>${currency(row.confirmed_gross)}</td></tr>`).join('') : '<tr><td colspan="4">Ainda não publicou eventos.</td></tr>';
+      openModal('Painel do organizador','Vendas e reservas apenas dos seus eventos.',`<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email)} · Organizador</small></div></div><div class="report-summary"><div class="metric"><small>Os meus eventos</small><strong>${events.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div></div><p class="form-note">O relatório apresenta totais. Os dados pessoais dos compradores não aparecem neste painel.</p><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Ingressos pagos</th><th>Reservas</th><th>Faturamento confirmado</th></tr></thead><tbody>${reportRows}</tbody></table></div><div class="form-actions"><button class="button button-outline" data-action="publish">Publicar evento</button><button class="button button-outline" data-action="logout">Sair da conta</button></div>`);
+    } catch (error) { showError(error.message, 'Painel do organizador'); }
+  }
   publishEvent = () => {
     if (!account) { authIntent = 'publish'; openLogin(); return; }
     pendingEventImages = [];
@@ -264,7 +272,7 @@
     } catch (error) { showError(error.message, 'Painel administrativo'); }
   }
   window.adminPanel = adminPanel;
-  window.adminAccess = () => account?.rawRole === 'admin' ? adminPanel() : openLogin();
+  window.adminAccess = () => { if(account?.rawRole==='admin')adminPanel();else if(account)organizerPanel();else{authIntent='admin';openLogin();} };
   confirmOrderPayment = reference => {
     if (account?.rawRole !== 'admin') return;
     const order=orders.find(item=>item.reference===reference); if(!order)return;
@@ -286,9 +294,9 @@
     if(auth){event.preventDefault();event.stopImmediatePropagation();authForm(auth);return;}
     if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();if(!account)openLogin();return;}
     if(event.target.closest('[data-action="publish"]')||['admin-new'].includes(action)){event.preventDefault();event.stopImmediatePropagation();publishEvent();return;}
-    if(action==='admin'){event.preventDefault();event.stopImmediatePropagation();adminPanel();return;}
+    if(action==='admin'){event.preventDefault();event.stopImmediatePropagation();if(account?.rawRole==='admin')adminPanel();else if(account)organizerPanel();else{authIntent='admin';openLogin();}return;}
     if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';modal.close();return;}
-    if(action==='logout-register'){event.preventDefault();event.stopImmediatePropagation();saveSession(null);account=null;accountId=null;authIntent='publish';modal.close();authForm('register-organizer');return;}
+    if(action==='logout-register'){event.preventDefault();event.stopImmediatePropagation();saveSession(null);account=null;accountId=null;authIntent=null;modal.close();openLogin();return;}
     if(action==='save-commission'){event.preventDefault();event.stopImmediatePropagation();const rate=Number(modalBody.querySelector('#commissionRate')?.value);if(!Number.isFinite(rate)||rate<0||rate>100)return;try{await request('/rest/v1/platform_settings?key=eq.commission_percent',{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({value:rate})});await adminPanel();}catch(error){showError(error.message);}return;}
     if(action==='export-report'){event.preventDefault();event.stopImmediatePropagation();downloadReport();return;}
     const edit=event.target.closest('[data-edit-event]');if(edit){event.preventDefault();event.stopImmediatePropagation();editManagedEvent(edit.dataset.editEvent);return;}
@@ -311,7 +319,7 @@
         else openModal('Confirmação ainda ativa','A conta foi criada, mas o Supabase ainda exige confirmação por e-mail.',`<p class="form-note">Para entrar diretamente após o cadastro, o administrador precisa desativar “Confirm email” nas definições de autenticação do projeto Supabase.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
       } else if(kind==='login'){
         const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password})},false);
-        saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);authIntent=null;
+        saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);else if(authIntent==='admin'){if(account?.rawRole==='admin')adminPanel();else organizerPanel();}authIntent=null;
       } else if(kind==='password-recovery-request'){
         await request('/auth/v1/recover',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase()})},false);
         openModal('Verifique o seu e-mail','Enviámos um link para criar uma nova palavra-passe.',`<p class="form-note">Abra o link neste dispositivo e escolha a nova palavra-passe.</p><div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
