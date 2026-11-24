@@ -56,7 +56,7 @@
   async function loadAccount() {
     if (!session?.user?.id) { account = null; accountId = null; adminSession = false; return; }
     accountId = session.user.id;
-    const rows = await request(`/rest/v1/profiles?id=eq.${encodeURIComponent(accountId)}&select=id,full_name,phone,role,profile_photo_path,organizer_status`);
+    const rows = await request(`/rest/v1/profiles?id=eq.${encodeURIComponent(accountId)}&select=id,full_name,phone,role,profile_photo_path`);
     const profile = rows?.[0];
     if (!profile) throw new Error('O perfil desta conta não foi encontrado.');
     const email = session.user.email || '';
@@ -64,7 +64,7 @@
     const profilePhotoPath = profile.profile_photo_path || '';
     const identitySubmitted = profile.role !== 'admin' ? await request('/rest/v1/rpc/has_organizer_bi',{method:'POST',body:'{}'}) : false;
     account = { id: profile.id, email, name: profile.full_name || fallbackName, profileHasName:Boolean(profile.full_name||session.user.user_metadata?.full_name), phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role,
-      identitySubmitted: Boolean(identitySubmitted), organizerStatus: profile.organizer_status || null, profilePhotoPath,
+      identitySubmitted: Boolean(identitySubmitted), organizerStatus: null, profilePhotoPath,
       profilePhotoUrl: profilePhotoPath ? publicProfilePhoto(profilePhotoPath) : '' };
     adminSession = profile.role === 'admin';
     const label = document.querySelector('#accountButton span'); if (label) label.textContent = account?.name || 'Entrar';
@@ -290,7 +290,7 @@
       const [reports, settings, profiles, identityData, moderationEvents] = await Promise.all([
         request('/rest/v1/admin_event_report?select=*&order=starts_at.desc'),
         request('/rest/v1/platform_settings?key=eq.commission_percent&select=value'),
-        request('/rest/v1/profiles?select=id,full_name,phone,role,organizer_status&order=created_at.asc'),
+        request('/rest/v1/profiles?select=id,full_name,phone,role&order=created_at.asc'),
         request('/rest/v1/organizer_private_data?select=user_id,bi_number'),
         request('/rest/v1/events?select=id,title,status,organizer_id,starts_at&order=created_at.desc')
       ]);
