@@ -26,7 +26,7 @@
   async function loadAll(){
     const [profiles,events,orders,reports,settings]=await Promise.all([
       request('/rest/v1/profiles?select=id,full_name,phone,role&order=created_at.asc'),
-      request('/rest/v1/events?select=id,title,venue,starts_at,status,organizer_id,ticket_capacity,ticket_price&order=created_at.desc'),
+      request('/rest/v1/events?select=id,title,category,venue,starts_at,status,organizer_id,ticket_capacity,ticket_price,description&order=created_at.desc'),
       request('/rest/v1/ticket_orders?select=id,reference,event_id,buyer_id,buyer_name,buyer_email,quantity,total,status,payment_method,payment_reference,paid_at,digital_ticket_code&order=created_at.desc'),
       request('/rest/v1/admin_event_report?select=*'),
       request('/rest/v1/platform_settings?key=eq.commission_percent&select=value')
@@ -40,12 +40,37 @@
     const paidOrders=data.orders.filter(o=>o.status==='paid').length;
     const gross=data.orders.filter(o=>o.status==='paid').reduce((s,o)=>s+Number(o.total||0),0);
     $('#metrics').innerHTML=`<div class="metric"><small>Organizadores</small><strong>${organizerRows.length}</strong></div><div class="metric"><small>Eventos</small><strong>${data.events.length}</strong></div><div class="metric"><small>Pagamentos pendentes</small><strong>${pendingOrders}</strong></div><div class="metric"><small>Faturamento pago</small><strong>${money(gross)}</strong></div>`;
+    $('#userTable').innerHTML=`<table class="table"><thead><tr><th>Utilizador</th><th>Telefone</th><th>Papel</th><th>Ações</th></tr></thead><tbody>${data.profiles.length?data.profiles.map(p=>`<tr><td>${esc(p.full_name||'Sem nome')}</td><td>${esc(p.phone||'—')}</td><td><span class="tag ${esc(p.role)}">${esc(p.role)}</span></td><td><button class="action" data-role="${esc(p.id)}" data-role-value="participant">Participante</button><button class="action" data-role="${esc(p.id)}" data-role-value="organizer">Organizador</button><button class="action suspend" data-role="${esc(p.id)}" data-role-value="admin">Admin</button></td></tr>`).join(''):'<tr><td colspan="4">Nenhum utilizador encontrado.</td></tr>'}</tbody></table>`;
     $('#organizerTable').innerHTML=`<table class="table"><thead><tr><th>Organizador</th><th>Telefone</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${organizerRows.length?organizerRows.map(p=>`<tr><td>${esc(p.full_name||'Sem nome')}</td><td>${esc(p.phone||'—')}</td><td><span class="tag pending">Pendente</span></td><td><button class="action approve" data-approve="${esc(p.id)}">Aprovar</button><button class="action suspend" data-suspend="${esc(p.id)}">Suspender</button></td></tr>`).join(''):'<tr><td colspan="4">Nenhum organizador cadastrado.</td></tr>'}</tbody></table>`;
-    $('#eventTable').innerHTML=`<table class="table"><thead><tr><th>Evento</th><th>Local</th><th>Lotação</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${data.events.length?data.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${esc(e.venue)}</td><td>${e.ticket_capacity}</td><td><span class="tag ${esc(e.status)}">${esc(e.status)}</span></td><td>${e.status==='draft'?`<button class="action approve" data-publish="${esc(e.id)}">Publicar</button><button class="action reject" data-reject="${esc(e.id)}">Rejeitar</button>`:`<button class="action reject" data-reject="${esc(e.id)}">Cancelar</button>`}</td></tr>`).join(''):'<tr><td colspan="5">Nenhum evento encontrado.</td></tr>'}</tbody></table>`;
+    $('#eventTable').innerHTML=`<table class="table"><thead><tr><th>Evento</th><th>Local</th><th>Lotação</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${data.events.length?data.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${esc(e.venue)}</td><td>${e.ticket_capacity}</td><td><span class="tag ${esc(e.status)}">${esc(e.status)}</span></td><td><button class="action" data-edit-event="${esc(e.id)}">Editar</button>${e.status==='draft'?`<button class="action approve" data-publish="${esc(e.id)}">Publicar</button><button class="action reject" data-reject="${esc(e.id)}">Rejeitar</button>`:`<button class="action reject" data-reject="${esc(e.id)}">Cancelar</button>`}<button class="action reject" data-delete-event="${esc(e.id)}">Excluir</button></td></tr>`).join(''):'<tr><td colspan="5">Nenhum evento encontrado.</td></tr>'}</tbody></table>`;
     $('#orderTable').innerHTML=`<table class="table"><thead><tr><th>Pedido</th><th>Cliente</th><th>Evento</th><th>Valor</th><th>Método</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${data.orders.length?data.orders.map(o=>`<tr><td><strong>${esc(o.reference)}</strong><br><small>${esc(o.payment_reference||'Sem referência')}</small></td><td>${esc(o.buyer_name||o.buyer_email||'—')}</td><td>${esc(o.event_id)}</td><td>${money(o.total)}</td><td>${esc(moneyMethod(o.payment_method))}</td><td><span class="tag ${esc(o.status)}">${esc(o.status)}</span></td><td>${o.status==='reserved'?`<button class="action pay" data-pay="${esc(o.id)}">Confirmar pagamento</button><button class="action reject" data-cancel-order="${esc(o.id)}">Cancelar</button>`:o.digital_ticket_code?esc(o.digital_ticket_code):'—'}</td></tr>`).join(''):'<tr><td colspan="7">Nenhum pedido encontrado.</td></tr>'}</tbody></table>`;
     $('#overviewContent').innerHTML='<p>A administração privada gere organizadores, eventos, pedidos, pagamentos e emissão de ingressos digitais.</p>';
   }
   async function refresh(){try{render(await loadAll())}catch(error){alert(error.message)}}
+  let crudData=null;
+  function openCrud(title,html){$('#crudTitle').textContent=title;$('#crudBody').innerHTML=html;$('#crudModal').classList.add('open')}
+  function closeCrud(){ $('#crudModal').classList.remove('open');$('#crudBody').innerHTML='';crudData=null}
+  $('#crudClose').addEventListener('click',closeCrud);
+  $('#crudModal').addEventListener('click',event=>{if(event.target.id==='crudModal')closeCrud()});
+  async function openEventForm(eventId=null){
+    const data=await loadAll();
+    const event=eventId?(data.events||[]).find(e=>e.id===eventId):null;
+    const organizers=(data.profiles||[]).filter(p=>p.role==='organizer'||p.role==='admin');
+    const eventDate=event?.starts_at?new Date(event.starts_at).toISOString().slice(0,16):'';
+    openCrud(event?'Editar evento':'Criar evento',`<form id="eventCrudForm"><input type="hidden" name="id" value="${esc(event?.id||'')}"><div class="form-grid"><div class="field full"><label>Título</label><input name="title" required maxlength="120" value="${esc(event?.title||'')}"></div><div class="field"><label>Categoria</label><select name="category" required><option ${event?.category==='Casamentos'||!event?'selected':''}>Casamentos</option><option ${event?.category==='Festas'?'selected':''}>Festas</option><option ${event?.category==='Música'?'selected':''}>Música</option><option ${event?.category==='Cultura'?'selected':''}>Cultura</option><option ${event?.category==='Lifestyle'?'selected':''}>Lifestyle</option></select></div><div class="field"><label>Data e hora</label><input name="starts_at" type="datetime-local" required value="${esc(eventDate)}"></div><div class="field full"><label>Local</label><input name="venue" required maxlength="100" value="${esc(event?.venue||'')}"></div><div class="field"><label>Preço (Kz)</label><input name="ticket_price" type="number" min="0" step="0.01" required value="${esc(event?.ticket_price||0)}"></div><div class="field"><label>Lotação</label><input name="ticket_capacity" type="number" min="1" max="100000" required value="${esc(event?.ticket_capacity||100)}"></div><div class="field full"><label>Organizador</label><select name="organizer_id" required>${organizers.map(p=>`<option value="${esc(p.id)}" ${event?.organizer_id===p.id?'selected':''}>${esc(p.full_name||p.id)}</option>`).join('')}</select></div><div class="field full"><label>Descrição</label><textarea name="description">${esc(event?.description||'')}</textarea></div></div><div class="modal-actions"><button type="button" class="action" id="crudCancel">Cancelar</button><button type="submit" class="action approve">${event?'Guardar alterações':'Criar evento'}</button></div></form>`);
+    $('#crudCancel').addEventListener('click',closeCrud);
+    $('#eventCrudForm').addEventListener('submit',async event=>{
+      event.preventDefault();
+      const form=new FormData(event.target);
+      const id=form.get('id');
+      const payload={title:form.get('title').trim(),category:form.get('category'),starts_at:new Date(form.get('starts_at')).toISOString(),venue:form.get('venue').trim(),ticket_price:Number(form.get('ticket_price')),ticket_capacity:Number(form.get('ticket_capacity')),organizer_id:form.get('organizer_id'),description:(form.get('description')||'').trim(),status:'published'};
+      try{
+        if(id)await request('/rest/v1/events?id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(payload)});
+        else await request('/rest/v1/events',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(payload)});
+        closeCrud();await refresh();
+      }catch(error){alert(error.message)}
+    });
+  }
   async function start(){
     session=sessionRead();if(!session?.access_token)return;
     try{
@@ -59,6 +84,19 @@
   $('#logout').addEventListener('click',()=>{sessionSave(null);location.reload()});
   document.addEventListener('click',async event=>{
     const panel=event.target.closest('[data-panel]');if(panel){document.querySelectorAll('.side-link').forEach(b=>b.classList.remove('active'));panel.classList.add('active');document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));$('#'+panel.dataset.panel).classList.add('active');$('#pageTitle').textContent=panel.textContent.trim();return}
+    if(event.target.closest('[data-new-event]')){openEventForm();return}
+    const editEvent=event.target.closest('[data-edit-event]');if(editEvent){openEventForm(editEvent.dataset.editEvent);return}
+    const deleteEvent=event.target.closest('[data-delete-event]');
+    if(deleteEvent){
+      if(!confirm('Excluir definitivamente este evento? Esta operação só funciona se não existirem pedidos ligados.'))return;
+      try{
+        await request('/rest/v1/events?id=eq.'+encodeURIComponent(deleteEvent.dataset.deleteEvent),{method:'DELETE'});
+        await refresh();
+      }catch(error){alert(error.message)}
+      return;
+    }
+    const role=event.target.closest('[data-role]');if(role){if(!confirm('Alterar o papel deste utilizador?'))return;try{await request('/rest/v1/profiles?id=eq.'+encodeURIComponent(role.dataset.role),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({role:role.dataset.roleValue})});await refresh()}catch(error){alert(error.message)}return}
+    const cancelOrder=event.target.closest('[data-cancel-order]');if(cancelOrder){if(!confirm('Cancelar este pedido?'))return;try{await request('/rest/v1/ticket_orders?id=eq.'+encodeURIComponent(cancelOrder.dataset.cancelOrder),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({status:'cancelled'})});await refresh()}catch(error){alert(error.message)}return}
     const pay=event.target.closest('[data-pay]');if(pay){if(!confirm('Confirmar pagamento e emitir ingresso digital?'))return;try{await request('/rest/v1/rpc/issue_paid_ticket',{method:'POST',body:JSON.stringify({p_order_id:pay.dataset.pay})});await refresh()}catch(e){alert(e.message)}return}
     const approve=event.target.closest('[data-approve]');if(approve){try{await request('/rest/v1/rpc/approve_organizer',{method:'POST',body:JSON.stringify({p_user_id:approve.dataset.approve})});await refresh()}catch(e){alert(e.message)}return}
     const suspend=event.target.closest('[data-suspend]');if(suspend){try{await request('/rest/v1/rpc/suspend_organizer',{method:'POST',body:JSON.stringify({p_user_id:suspend.dataset.suspend})});await refresh()}catch(e){alert(e.message)}return}
