@@ -143,14 +143,18 @@
   async function toggleEventLike(eventId) {
     if (!account) { authIntent='social'; openLogin(); return null; }
     const social=await loadEventSocial(eventId);
-    await request('/rest/v1/rpc/toggle_event_like',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({p_event_id:eventId})});
+    if (social.liked) {
+      await request('/rest/v1/event_likes?event_id=eq.'+encodeURIComponent(eventId)+'&user_id=eq.'+encodeURIComponent(session.user.id),{method:'DELETE',headers:{Prefer:'return=minimal'}});
+    } else {
+      await request('/rest/v1/event_likes',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({event_id:eventId,user_id:session.user.id})});
+    }
     return loadEventSocial(eventId);
   }
   async function submitEventComment(eventId, content) {
     if (!account) { authIntent='social'; openLogin(); return null; }
     const clean=content.trim();
     if (clean.length < 1 || clean.length > 500) throw new Error('Escreva um comentário entre 1 e 500 caracteres.');
-    await request('/rest/v1/rpc/add_event_comment',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({p_event_id:eventId,p_content:clean})});
+    await request('/rest/v1/event_comments',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({event_id:eventId,user_id:session.user.id,author_name:account.name,status:'visible',content:clean})});
     return loadEventSocial(eventId);
   }
   function authForm(mode) {
