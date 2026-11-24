@@ -19,7 +19,7 @@
   async function authenticate(email,password){
     const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);
     sessionSave(result);
-    const profiles=await request('/rest/v1/profiles?id=eq.'+encodeURIComponent(result.user.id)+'&select=id,full_name,email,role');
+    const profiles=await request('/rest/v1/profiles?id=eq.'+encodeURIComponent(result.user.id)+'&select=id,full_name,role');
     const profile=profiles?.[0];if(profile?.role!=='admin')throw new Error('Esta conta não tem acesso administrativo.');
     account={...profile,email:result.user.email};sessionSave(result);
   }
