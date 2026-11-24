@@ -252,7 +252,9 @@
       <div class="field full"><label for="eventImage">Flyers e fotografias (até 5)</label><input id="eventImage" name="images" type="file" multiple accept="image/jpeg,image/png,image/webp"><span class="help">JPG, PNG ou WEBP, até 10 MB por imagem.</span><div class="upload-gallery" id="eventImagePreview"></div><span class="help" id="uploadMessage" aria-live="polite"></span></div>
       <div class="field full"><label for="eventVideo">Vídeos do evento (até 2)</label><input id="eventVideo" name="videos" type="file" multiple accept="video/mp4,video/webm,video/quicktime"><span class="help">MP4, WEBM ou MOV, até 100 MB por vídeo.</span><div class="upload-gallery" id="eventVideoPreview"></div><span class="help" id="videoUploadMessage" aria-live="polite"></span></div>
       <div class="field full"><label for="eventDescription">Descrição</label><textarea id="eventDescription" name="description" maxlength="500"></textarea></div></div>
-      <p class="form-note">As reservas são registadas como pendentes. Pagamentos online ainda não estão integrados.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Publicar evento</button></div></form>`);
+      <div class="field full"><label for="publicationPaymentMethod">Pagamento da publicação — 2 000 Kz</label><select id="publicationPaymentMethod" name="publication_payment_method" required><option value="multicaixa_express">Multicaixa Express</option><option value="referencia">Pagamento por referência</option><option value="transferencia">Transferência bancária</option><option value="dinheiro">Dinheiro no atendimento</option></select></div>
+      <div class="field full"><label for="publicationPaymentReference">Referência ou comprovativo do pagamento</label><input id="publicationPaymentReference" name="publication_payment_reference" maxlength="80" placeholder="Opcional agora, obrigatório para comprovação"></div>
+      <p class="form-note">Taxa obrigatória de publicação: 2 000 Kz. O evento não será publicado até o pagamento ser confirmado pela administração.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Solicitar publicação — 2 000 Kz</button></div></form>`);
     const videoInput = modalBody.querySelector('#eventVideo');
     videoInput?.addEventListener('change', () => {
       const allowed = ['video/mp4','video/webm','video/quicktime'];
@@ -350,6 +352,9 @@
   }
   async function saveEvent(data, eventId = null) {
     const old = eventId ? allEvents().find(item=>item.id===eventId) : null;
+    if (!old && account.rawRole !== 'admin') {
+      if (!data.publication_payment_method) throw new Error('Pague a taxa de publicação de 2 000 Kz antes de publicar o evento.');
+    }
     const organizer = await saveOrganizerDetails(data);
     const payload = { title:data.title.trim(), category:data.category, starts_at:new Date(data.date).toISOString(), venue:data.place.trim(),
       description:(data.description||'').trim(), ticket_price:Number(data.price), ticket_capacity:Number(data.quantity),
@@ -361,14 +366,28 @@
     else rows = await request('/rest/v1/events', { method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify({...payload,organizer_id:account.id}) });
     const saved = rows?.[0];
     if (!saved) throw new Error('O evento não foi guardado. Confirme se a sua conta tem acesso de organizador.');
+    if (account.rawRole !== 'admin') {
+      await request('/rest/v1/event_publication_payments',{
+        method:'POST',
+        headers:{Prefer:'return=representation'},
+        body:JSON.stringify({
+          event_id:saved.id,
+          organizer_id:account.id,
+          amount:2000,
+          payment_method:data.publication_payment_method||'',
+          payment_reference:(data.publication_payment_reference||'').trim()||null,
+          status:'pending'
+        })
+      });
+    }
     await uploadImages(saved.id, pendingEventImages);
     await uploadEventVideos(saved.id, pendingEventVideos);
     pendingEventImages = [];
     pendingEventVideos = [];
     await loadEvents(); modal.close(); document.getElementById('eventos').scrollIntoView({behavior:'smooth'});
     showConfirmation(
-      old?'Evento atualizado':account.rawRole==='admin'?'Evento publicado':'Evento enviado',
-      old?'As alterações foram guardadas':account.rawRole==='admin'?'O evento já está na plataforma':'O evento aguarda aprovação da administração',
+      old?'Evento atualizado':account.rawRole==='admin'?'Evento publicado':'Pagamento pendente',
+      old?'As alterações foram guardadas':account.rawRole==='admin'?'O evento já está na plataforma':'Pagamento de 2 000 Kz registado. O evento ficará privado até confirmação.',
       `EV-${saved.id.slice(0,6).toUpperCase()}`
     );
   }

@@ -24,14 +24,15 @@
     account={...profile,email:result.user.email};sessionSave(result);
   }
   async function loadAll(){
-    const [profiles,events,orders,reports,settings]=await Promise.all([
+    const [profiles,events,orders,reports,publicationPayments,settings]=await Promise.all([
       request('/rest/v1/profiles?select=id,full_name,phone,role&order=created_at.asc'),
       request('/rest/v1/events?select=id,title,category,venue,starts_at,status,organizer_id,ticket_capacity,ticket_price,description&order=created_at.desc'),
       request('/rest/v1/ticket_orders?select=id,reference,event_id,buyer_id,buyer_name,buyer_email,quantity,total,status,payment_method,payment_reference,paid_at,digital_ticket_code&order=created_at.desc'),
       request('/rest/v1/admin_event_report?select=*'),
+      request('/rest/v1/event_publication_payments?select=id,event_id,organizer_id,amount,payment_method,payment_reference,status,receipt_code,paid_at,created_at&order=created_at.desc'),
       request('/rest/v1/platform_settings?key=eq.commission_percent&select=value')
     ]);
-    return {profiles:profiles||[],events:events||[],orders:orders||[],reports:reports||[],commission:Number(settings?.[0]?.value??10)};
+    return {profiles:profiles||[],events:events||[],orders:orders||[],reports:reports||[],publicationPayments:publicationPayments||[],commission:Number(settings?.[0]?.value??10)};
   }
   function moneyMethod(method){return {multicaixa_express:'Multicaixa Express',referencia:'Referência',transferencia:'Transferência',cartao:'Cartão',dinheiro:'Dinheiro'}[method]||'Não informado'}
   function render(data){
@@ -44,6 +45,7 @@
     $('#organizerTable').innerHTML=`<table class="table"><thead><tr><th>Organizador</th><th>Telefone</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${organizerRows.length?organizerRows.map(p=>`<tr><td>${esc(p.full_name||'Sem nome')}</td><td>${esc(p.phone||'—')}</td><td><span class="tag pending">Pendente</span></td><td><button class="action approve" data-approve="${esc(p.id)}">Aprovar</button><button class="action suspend" data-suspend="${esc(p.id)}">Suspender</button></td></tr>`).join(''):'<tr><td colspan="4">Nenhum organizador cadastrado.</td></tr>'}</tbody></table>`;
     $('#eventTable').innerHTML=`<table class="table"><thead><tr><th>Evento</th><th>Local</th><th>Lotação</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${data.events.length?data.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${esc(e.venue)}</td><td>${e.ticket_capacity}</td><td><span class="tag ${esc(e.status)}">${esc(e.status)}</span></td><td><button class="action" data-edit-event="${esc(e.id)}">Editar</button>${e.status==='draft'?`<button class="action approve" data-publish="${esc(e.id)}">Publicar</button><button class="action reject" data-reject="${esc(e.id)}">Rejeitar</button>`:`<button class="action reject" data-reject="${esc(e.id)}">Cancelar</button>`}<button class="action reject" data-delete-event="${esc(e.id)}">Excluir</button></td></tr>`).join(''):'<tr><td colspan="5">Nenhum evento encontrado.</td></tr>'}</tbody></table>`;
     $('#orderTable').innerHTML=`<table class="table"><thead><tr><th>Pedido</th><th>Cliente</th><th>Evento</th><th>Valor</th><th>Método</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${data.orders.length?data.orders.map(o=>`<tr><td><strong>${esc(o.reference)}</strong><br><small>${esc(o.payment_reference||'Sem referência')}</small></td><td>${esc(o.buyer_name||o.buyer_email||'—')}</td><td>${esc(o.event_id)}</td><td>${money(o.total)}</td><td>${esc(moneyMethod(o.payment_method))}</td><td><span class="tag ${esc(o.status)}">${esc(o.status)}</span></td><td>${o.status==='reserved'?`<button class="action pay" data-pay="${esc(o.id)}">Confirmar pagamento</button><button class="action reject" data-cancel-order="${esc(o.id)}">Cancelar</button>`:o.digital_ticket_code?esc(o.digital_ticket_code):'—'}</td></tr>`).join(''):'<tr><td colspan="7">Nenhum pedido encontrado.</td></tr>'}</tbody></table>`;
+    $('#publicationPaymentTable').innerHTML=`<table class="table"><thead><tr><th>Pagamento</th><th>Evento</th><th>Método</th><th>Referência</th><th>Estado</th><th>Ação</th></tr></thead><tbody>${data.publicationPayments.length?data.publicationPayments.map(payment=>`<tr><td><strong>${esc(payment.receipt_code||'PENDENTE')}</strong><br>${money(payment.amount)}</td><td>${esc(payment.event_id)}</td><td>${esc(moneyMethod(payment.payment_method))}</td><td>${esc(payment.payment_reference||'—')}</td><td><span class="tag ${esc(payment.status)}">${esc(payment.status)}</span></td><td>${payment.status==='pending'?`<button class="action pay" data-confirm-publication="${esc(payment.id)}">Confirmar 2 000 Kz</button>`:'Pago'}</td></tr>`).join(''):'<tr><td colspan="6">Nenhum pagamento de publicação.</td></tr>'}</tbody></table>`;
     $('#overviewContent').innerHTML='<p>A administração privada gere organizadores, eventos, pedidos, pagamentos e emissão de ingressos digitais.</p>';
   }
   async function refresh(){try{render(await loadAll())}catch(error){alert(error.message)}}
@@ -98,6 +100,15 @@
     const role=event.target.closest('[data-role]');if(role){if(!confirm('Alterar o papel deste utilizador?'))return;try{await request('/rest/v1/profiles?id=eq.'+encodeURIComponent(role.dataset.role),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({role:role.dataset.roleValue})});await refresh()}catch(error){alert(error.message)}return}
     const cancelOrder=event.target.closest('[data-cancel-order]');if(cancelOrder){if(!confirm('Cancelar este pedido?'))return;try{await request('/rest/v1/ticket_orders?id=eq.'+encodeURIComponent(cancelOrder.dataset.cancelOrder),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({status:'cancelled'})});await refresh()}catch(error){alert(error.message)}return}
     const pay=event.target.closest('[data-pay]');if(pay){if(!confirm('Confirmar pagamento e emitir ingresso digital?'))return;try{await request('/rest/v1/rpc/issue_paid_ticket',{method:'POST',body:JSON.stringify({p_order_id:pay.dataset.pay})});await refresh()}catch(e){alert(e.message)}return}
+    const confirmPublication=event.target.closest('[data-confirm-publication]');
+    if(confirmPublication){
+      if(!confirm('Confirmar o pagamento de 2 000 Kz e publicar o evento?'))return;
+      try{
+        await request('/rest/v1/rpc/confirm_event_publication_payment',{method:'POST',body:JSON.stringify({p_payment_id:confirmPublication.dataset.confirmPublication})});
+        await refresh();
+      }catch(error){alert(error.message)}
+      return;
+    }
     const approve=event.target.closest('[data-approve]');if(approve){try{await request('/rest/v1/rpc/approve_organizer',{method:'POST',body:JSON.stringify({p_user_id:approve.dataset.approve})});await refresh()}catch(e){alert(e.message)}return}
     const suspend=event.target.closest('[data-suspend]');if(suspend){try{await request('/rest/v1/rpc/suspend_organizer',{method:'POST',body:JSON.stringify({p_user_id:suspend.dataset.suspend})});await refresh()}catch(e){alert(e.message)}return}
     const publish=event.target.closest('[data-publish]');if(publish){try{await request('/rest/v1/rpc/review_event',{method:'POST',body:JSON.stringify({p_event_id:publish.dataset.publish,p_status:'published'})});await refresh()}catch(e){alert(e.message)}return}
