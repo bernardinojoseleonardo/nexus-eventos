@@ -146,7 +146,11 @@
     if (social.liked) {
       await request('/rest/v1/event_likes?event_id=eq.'+encodeURIComponent(eventId)+'&user_id=eq.'+encodeURIComponent(session.user.id),{method:'DELETE',headers:{Prefer:'return=minimal'}});
     } else {
-      await request('/rest/v1/event_likes',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({event_id:eventId,user_id:session.user.id})});
+      try {
+        await request('/rest/v1/event_likes',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({event_id:eventId,user_id:session.user.id})});
+      } catch (error) {
+        if (!String(error.message).includes('duplicate key')) throw error;
+      }
     }
     return loadEventSocial(eventId);
   }
