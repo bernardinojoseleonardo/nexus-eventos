@@ -56,7 +56,7 @@
   async function loadAccount() {
     if (!session?.user?.id) { account = null; accountId = null; adminSession = false; return; }
     accountId = session.user.id;
-    const rows = await request(`/rest/v1/profiles?id=eq.${encodeURIComponent(accountId)}&select=id,full_name,phone,role,profile_photo_path`);
+    const rows = await request(`/rest/v1/profiles?id=eq.${encodeURIComponent(accountId)}&select=id,full_name,phone,role,profile_photo_path,organizer_status`);
     const profile = rows?.[0];
     if (!profile) throw new Error('O perfil desta conta não foi encontrado.');
     const email = session.user.email || '';
@@ -64,11 +64,16 @@
     const profilePhotoPath = profile.profile_photo_path || '';
     const identitySubmitted = profile.role !== 'admin' ? await request('/rest/v1/rpc/has_organizer_bi',{method:'POST',body:'{}'}) : false;
     account = { id: profile.id, email, name: profile.full_name || fallbackName, profileHasName:Boolean(profile.full_name||session.user.user_metadata?.full_name), phone: profile.phone || '', role: roleLabel(profile.role), rawRole: profile.role,
-      identitySubmitted: Boolean(identitySubmitted), profilePhotoPath,
+      identitySubmitted: Boolean(identitySubmitted), organizerStatus: profile.organizer_status || null, profilePhotoPath,
       profilePhotoUrl: profilePhotoPath ? publicProfilePhoto(profilePhotoPath) : '' };
     adminSession = profile.role === 'admin';
     const label = document.querySelector('#accountButton span'); if (label) label.textContent = account?.name || 'Entrar';
     const logout = document.getElementById('logoutButton'); if (logout) logout.style.display = account ? 'inline-flex' : 'none';
+    const adminButton = document.getElementById('adminButton');
+    if (adminButton) {
+      adminButton.style.display = 'inline-flex';
+      adminButton.textContent = profile.role === 'admin' ? 'Painel admin' : 'Administração';
+    }
   }
   function publicProfilePhoto(path) {
     return `${apiUrl}/storage/v1/object/public/organizer-profile-photos/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -91,11 +96,20 @@
   }
   async function loadEvents() {
     const rows = await request('/rest/v1/events?select=*,event_images(*)&status=eq.published&order=starts_at.asc', {}, false);
+    let availability = new Map();
+    try {
+      const availabilityRows = await request('/rest/v1/rpc/get_public_event_availability', { method: 'POST', body: '{}' }, false);
+      availability = new Map((availabilityRows || []).map(row => [row.event_id, Number(row.remaining_quantity)]));
+    } catch (error) {
+      console.warn('Disponibilidade pública ainda não está disponível no banco:', error.message);
+    }
     const mapped = await Promise.all((rows || []).map(async row => {
       const images = await Promise.all((row.event_images || []).sort((a,b) => a.position - b.position).map(async photo => ({
         src: await signedImage(photo.object_path), label: photo.label, path: photo.object_path
       })));
-      return mapEvent(row, images.filter(photo => photo.src));
+      const event = mapEvent(row, images.filter(photo => photo.src));
+      event.remaining = availability.has(event.id) ? availability.get(event.id) : event.quantity;
+      return event;
     }));
     customEvents = mapped; seedEvents.splice(0, seedEvents.length); eventOverrides = []; deletedEventIds = [];
     renderEvents();
@@ -109,10 +123,9 @@
       status: row.status, createdAt: row.created_at, paidAt: row.paid_at, id: row.id }));
   }
   function authForm(mode) {
-    if (mode === 'register-organizer') mode = 'register-participant';
     if (mode === 'register-participant' || mode === 'register-organizer') {
-      const role = 'participant';
-      openModal('Criar conta', 'Crie a sua conta para comprar ingressos e publicar eventos.', `<form data-form="register"><input type="hidden" name="role" value="${role}"><div class="form-grid">
+      const role = mode === 'register-organizer' ? 'organizer' : 'participant';
+      openModal('Criar conta', role==='organizer'?'Crie a sua conta; o cadastro de organizador requer aprovação.':'Crie a sua conta para comprar ingressos e reservar lugares.', `<form data-form="register"><input type="hidden" name="role" value="${role}"><div class="form-grid">
         <div class="field full"><label for="regName">Nome completo</label><input id="regName" name="name" required maxlength="80"></div>
         <div class="field"><label for="regEmail">E-mail</label><input id="regEmail" name="email" type="email" required maxlength="120"></div>
         <div class="field"><label for="regPhone">Telefone</label><input id="regPhone" name="phone" type="tel" maxlength="30"></div>
@@ -122,7 +135,7 @@
     } else if (mode === 'recover') {
       openModal('Recuperar palavra-passe', 'Enviaremos um link para o e-mail da sua conta.', `<form data-form="password-recovery-request"><div class="field full"><label for="recoveryEmail">E-mail</label><input id="recoveryEmail" name="email" type="email" required autocomplete="email"></div><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar</button><button class="button button-dark" type="submit">Enviar link</button></div></form>`);
     } else {
-      const roleChoices = '<button type="button" class="button button-outline" data-auth="register-participant">Criar conta</button>';
+      const roleChoices = '<button type="button" class="button button-outline" data-auth="register-participant">Criar conta como participante</button><button type="button" class="button button-outline" data-auth="register-organizer">Criar conta como organizador</button>';
       openModal('Entrar na NEXUS', authIntent === 'publish' ? 'Entre na sua conta para publicar o evento.' : authIntent === 'checkout' ? 'Entre na sua conta para comprar ingressos.' : 'Entre na sua conta para aceder à plataforma.', `<form data-form="login"><div class="form-grid">
         <div class="field full"><label for="loginEmail">E-mail</label><input id="loginEmail" name="email" type="email" required autocomplete="email"></div>
         <div class="field full"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password"></div>
@@ -141,8 +154,9 @@
       const own = customEvents.filter(item => item.organizer === account.id);
       const mine = orders.filter(item => account.rawRole === 'admin' || item.email === account.email);
       let content = `<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email)} · ${esc(account.role)}</small></div></div>`;
+      if (account.rawRole === 'admin') content += `<div class="form-actions"><button class="button button-dark" data-action="admin">Abrir painel de administração</button></div>`;
       if (account.rawRole === 'organizer' || account.rawRole === 'admin') content += `<h3 class="report-heading">Os seus eventos</h3>${own.length ? `<div class="dashboard-list">${own.map(item=>`<div class="dashboard-item"><strong>${esc(item.title)}</strong><span>${money(item.price)} · ${esc(item.place)}</span></div>`).join('')}</div>` : '<p class="form-note">Ainda não publicou eventos.</p>'}<button class="button button-dark" data-action="publish">Criar evento</button>`;
-      if (mine.length) content += `<h3 class="report-heading">As suas reservas</h3><div class="dashboard-list">${mine.map(item=>`<div class="dashboard-item"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)} · ${esc(item.status)}</span></div>`).join('')}</div>`;
+      if (mine.length) content += `<h3 class="report-heading">As suas reservas</h3><div class="dashboard-list">${mine.map(item=>`<div class="dashboard-item"><div><strong>${esc(item.eventTitle)}</strong><span style="display:block;margin-top:4px">${item.quantity} ingresso(s) · ${esc(item.reference)} · ${esc(item.status)}</span></div>${item.status==='reserved'?`<button class="button button-outline" data-cancel-reservation="${esc(item.id)}">Cancelar reserva</button>`:''}</div>`).join('')}</div>`;
       content += `<div class="form-actions"><button class="button button-outline" data-action="logout">Sair da conta</button></div>`;
       openModal('A sua conta', 'Dados e atividade guardados na plataforma.', content);
     } catch (error) { showError(error.message); }
@@ -161,6 +175,14 @@
   }
   publishEvent = () => {
     if (!account) { authIntent = 'publish'; openLogin(); return; }
+    if (account.rawRole === 'organizer' && account.organizerStatus === 'pending') {
+      openModal('Cadastro em análise', 'O seu perfil de organizador aguarda aprovação da administração.', '<p class="form-note">Pode preparar os dados, mas não conseguirá publicar atividades até que um administrador aprove o cadastro.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>');
+      return;
+    }
+    if (account.rawRole === 'organizer' && account.organizerStatus === 'suspended') {
+      openModal('Cadastro suspenso', 'A sua conta de organizador está suspensa.', '<p class="form-note">Contacte a administração da NEXUS para solicitar a reativação.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>');
+      return;
+    }
     pendingEventImages = [];
     const organizerFields = account.rawRole !== 'admin' ? `${account.profileHasName ? '' : `<div class="field"><label for="organizerName">Nome do organizador</label><input id="organizerName" name="organizer_name" required maxlength="80" placeholder="O nome que aparecerá no anúncio"></div>`}<div class="field"><label for="organizerContactPhone">Telefone de contacto</label><input id="organizerContactPhone" name="contact_phone" type="tel" value="${esc(account.phone)}" required maxlength="30"></div>
       ${account.identitySubmitted ? '<p class="form-note full">Dados de identificação recebidos e reservados à administração.</p>' : '<div class="field"><label for="organizerBi">Número do BI</label><input id="organizerBi" name="bi_number" required maxlength="32" autocomplete="off"></div>'}
@@ -227,7 +249,8 @@
     const old = eventId ? allEvents().find(item=>item.id===eventId) : null;
     const organizer = await saveOrganizerDetails(data);
     const payload = { title:data.title.trim(), category:data.category, starts_at:new Date(data.date).toISOString(), venue:data.place.trim(),
-      description:(data.description||'').trim(), ticket_price:Number(data.price), ticket_capacity:Number(data.quantity), status:'published',
+      description:(data.description||'').trim(), ticket_price:Number(data.price), ticket_capacity:Number(data.quantity),
+      status:old ? old.status : (account.rawRole==='admin'?'published':'draft'),
       organizer_name:old?old.organizerName||'':organizer.name, organizer_phone:old?old.organizerPhone||'':organizer.phone,
       organizer_photo_url:old?old.organizerPhotoUrl||'':organizer.photoUrl };
     let rows;
@@ -238,13 +261,23 @@
     await uploadImages(saved.id, pendingEventImages);
     pendingEventImages = [];
     await loadEvents(); modal.close(); document.getElementById('eventos').scrollIntoView({behavior:'smooth'});
-    showConfirmation(old?'Evento atualizado':'Evento publicado', old?'As alterações foram guardadas':'O evento já está na plataforma', `EV-${saved.id.slice(0,6).toUpperCase()}`);
+    showConfirmation(
+      old?'Evento atualizado':account.rawRole==='admin'?'Evento publicado':'Evento enviado',
+      old?'As alterações foram guardadas':account.rawRole==='admin'?'O evento já está na plataforma':'O evento aguarda aprovação da administração',
+      `EV-${saved.id.slice(0,6).toUpperCase()}`
+    );
   }
   openCheckoutForm = event => {
     selectedEvent = event;
+    const remaining = Math.max(0, Number.isFinite(event.remaining) ? event.remaining : event.quantity);
+    if (remaining < 1) {
+      openModal('Ingressos esgotados', event.title, '<p class="form-note">Todos os lugares deste evento já foram reservados ou vendidos.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>');
+      return;
+    }
+    const maximum = Math.min(20, remaining);
     openModal('Reservar ingresso', `${event.title} · ${event.place}`, `<form data-form="checkout"><div class="form-grid">
       <div class="field full"><label>E-mail do participante</label><input value="${esc(account?.email||'')}" disabled></div>
-      <div class="field"><label for="ticketQty">Quantidade</label><select id="ticketQty" name="quantity">${[1,2,3,4,5].map(n=>`<option>${n}</option>`).join('')}</select></div>
+      <div class="field"><label for="ticketQty">Quantidade</label><select id="ticketQty" name="quantity">${Array.from({length: maximum}, (_, index) => index + 1).map(n=>`<option>${n}</option>`).join('')}</select></div>
       <div class="field"><label>Total estimado</label><input id="orderTotal" value="${money(event.price)}" disabled></div></div>
       <p class="form-note">A reserva fica pendente. Nenhum pagamento será cobrado nesta etapa.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Confirmar reserva</button></div></form>`);
     modalBody.querySelector('#ticketQty').addEventListener('change',e=>{modalBody.querySelector('#orderTotal').value=money(event.price*Number(e.target.value));});
@@ -254,11 +287,12 @@
   async function adminPanel() {
     if (account?.rawRole !== 'admin') { openLogin(); return; }
     try {
-      const [reports, settings, profiles, identityData] = await Promise.all([
+      const [reports, settings, profiles, identityData, moderationEvents] = await Promise.all([
         request('/rest/v1/admin_event_report?select=*&order=starts_at.desc'),
         request('/rest/v1/platform_settings?key=eq.commission_percent&select=value'),
-        request('/rest/v1/profiles?select=id,full_name'),
-        request('/rest/v1/organizer_private_data?select=user_id,bi_number')
+        request('/rest/v1/profiles?select=id,full_name,phone,role,organizer_status&order=created_at.asc'),
+        request('/rest/v1/organizer_private_data?select=user_id,bi_number'),
+        request('/rest/v1/events?select=id,title,status,organizer_id,starts_at&order=created_at.desc')
       ]);
       const profileById=new Map((profiles||[]).map(profile=>[profile.id,profile]));
       const biByOrganizer=new Map((identityData||[]).map(row=>[row.user_id,row.bi_number]));
@@ -266,9 +300,20 @@
       await loadOrders();
       const sold = reports.reduce((sum,row)=>sum+Number(row.tickets_sold||0),0), reserved=reports.reduce((sum,row)=>sum+Number(row.tickets_reserved||0),0);
       const gross=reports.reduce((sum,row)=>sum+Number(row.confirmed_gross||0),0), nexus=gross*commissionRate/100;
+      const organizers=(profiles||[]).filter(profile=>profile.role==='organizer');
+      const organizerRows=organizers.length?organizers.map(profile=>{
+        const status=profile.organizer_status||'pending';
+        const bi=biByOrganizer.get(profile.id)||'—';
+        return `<tr><td><strong>${esc(profile.full_name||'Sem nome')}</strong><small style="display:block;margin-top:4px">${esc(profile.phone||'Sem telefone')}</small></td><td>${esc(status)}</td><td>${esc(bi)}</td><td><div class="admin-actions">${status==='pending'?`<button data-approve-organizer="${esc(profile.id)}">Aprovar</button>`:''}${status==='approved'?`<button class="danger" data-suspend-organizer="${esc(profile.id)}">Suspender</button>`:''}${status==='suspended'?`<button data-approve-organizer="${esc(profile.id)}">Reativar</button>`:''}</div></td></tr>`;
+      }).join(''):'<tr><td colspan="4">Ainda não há organizadores cadastrados.</td></tr>';
+      const eventQueue=(moderationEvents||[]).filter(row=>row.status==='draft');
+      const queueRows=eventQueue.length?eventQueue.map(row=>{
+        const organizer=profileById.get(row.organizer_id);
+        return `<tr><td><strong>${esc(row.title)}</strong></td><td>${esc(organizer?.full_name||'Organizador')}</td><td>${row.starts_at?esc(formatDate(row.starts_at)):'Sem data'}</td><td><div class="admin-actions"><button data-review-event="${esc(row.id)}" data-event-review-status="published">Publicar</button><button class="danger" data-review-event="${esc(row.id)}" data-event-review-status="cancelled">Rejeitar</button></div></td></tr>`;
+      }).join(''):'<tr><td colspan="4">Não há atividades aguardando aprovação.</td></tr>';
       const rows=reports.length?reports.map(row=>`<tr><td><strong>${esc(row.title)}</strong></td><td>${row.tickets_sold}</td><td>${row.tickets_reserved}</td><td>${currency(row.confirmed_gross)}</td><td>${currency(row.reserved_gross)}</td><td>${currency(Number(row.confirmed_gross)*commissionRate/100)}</td><td>${currency(Number(row.reserved_gross)*commissionRate/100)}</td><td>${currency(Number(row.confirmed_gross)*(1-commissionRate/100))}</td><td>${esc(profileById.get(row.organizer_id)?.full_name||'—')}</td><td>${esc(biByOrganizer.get(row.organizer_id)||'—')}</td><td><div class="admin-actions"><button data-edit-event="${esc(row.event_id)}">Editar</button><button class="danger" data-delete-event="${esc(row.event_id)}">Cancelar</button></div></td></tr>`).join(''):'<tr><td colspan="10">Ainda não há eventos para gerir.</td></tr>';
       const recent=orders.slice(0,30).map(order=>`<div class="dashboard-item"><div><strong>${esc(order.eventTitle)}</strong><span style="display:block;margin-top:4px">${esc(order.email)} · ${order.quantity} ingresso(s) · ${esc(order.reference)}</span></div>${order.status==='paid'?'<strong>Pago</strong>':order.status==='reserved'?`<button class="button button-dark" data-mark-paid="${esc(order.reference)}">Confirmar pagamento</button>`:esc(order.status)}</div>`).join('')||'<p class="form-note">Ainda não há reservas.</p>';
-      openModal('Painel de administração','Relatório ligado aos dados confirmados no Supabase.',`<div class="report-summary"><div class="metric"><small>Eventos</small><strong>${reports.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div><div class="metric"><small>Receita NEXUS</small><strong>${currency(nexus)}</strong></div></div><p class="report-note">Reservas não são pagamentos. Só marque uma reserva como paga após confirmar o recebimento. Pagamentos online ainda não estão integrados.</p><div class="commission-control"><div class="field"><label for="commissionRate">Comissão NEXUS (%)</label><input id="commissionRate" type="number" min="0" max="100" step="0.5" value="${commissionRate}"></div><button class="button button-dark" data-action="save-commission">Guardar comissão</button><button class="button button-outline" data-action="export-report">Baixar relatório CSV</button><button class="button button-outline" data-action="admin-new">Novo evento</button><button class="button button-outline" data-action="admin-logout">Sair</button></div><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Pagos</th><th>Reservas</th><th>Faturamento</th><th>Valor reservado</th><th>NEXUS recebido</th><th>NEXUS estimado</th><th>Organizador</th><th>BI do organizador</th><th>Gerir</th></tr></thead><tbody>${rows}</tbody></table></div><h3 class="report-heading">Reservas recentes</h3><div class="reservation-list">${recent}</div>`);
+      openModal('Painel de administração','Controlo central de contas, atividades, vendas e pagamentos.',`<div class="report-summary"><div class="metric"><small>Eventos</small><strong>${reports.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div><div class="metric"><small>Receita NEXUS</small><strong>${currency(nexus)}</strong></div></div><p class="report-note">Reservas não são pagamentos. Só marque uma reserva como paga após confirmar o recebimento. Pagamentos online ainda não estão integrados.</p><div class="commission-control"><div class="field"><label for="commissionRate">Comissão NEXUS (%)</label><input id="commissionRate" type="number" min="0" max="100" step="0.5" value="${commissionRate}"></div><button class="button button-dark" data-action="save-commission">Guardar comissão</button><button class="button button-outline" data-action="export-report">Baixar relatório CSV</button><button class="button button-outline" data-action="admin-new">Novo evento</button><button class="button button-outline" data-action="admin-logout">Sair</button></div><h3 class="report-heading">Cadastros de organizadores</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Organizador</th><th>Estado</th><th>BI</th><th>Decisão</th></tr></thead><tbody>${organizerRows}</tbody></table></div><h3 class="report-heading">Atividades aguardando aprovação</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Atividade</th><th>Organizador</th><th>Data</th><th>Decisão</th></tr></thead><tbody>${queueRows}</tbody></table></div><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Pagos</th><th>Reservas</th><th>Faturamento</th><th>Valor reservado</th><th>NEXUS recebido</th><th>NEXUS estimado</th><th>Organizador</th><th>BI do organizador</th><th>Gerir</th></tr></thead><tbody>${rows}</tbody></table></div><h3 class="report-heading">Reservas recentes</h3><div class="reservation-list">${recent}</div>`);
     } catch (error) { showError(error.message, 'Painel administrativo'); }
   }
   window.adminPanel = adminPanel;
@@ -295,12 +340,34 @@
     if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();if(!account)openLogin();return;}
     if(event.target.closest('[data-action="publish"]')||['admin-new'].includes(action)){event.preventDefault();event.stopImmediatePropagation();publishEvent();return;}
     if(action==='admin'){event.preventDefault();event.stopImmediatePropagation();if(account?.rawRole==='admin')adminPanel();else if(account)organizerPanel();else{authIntent='admin';openLogin();}return;}
-    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';modal.close();return;}
+    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';const adminButton=document.getElementById('adminButton');if(adminButton){adminButton.style.display='inline-flex';adminButton.textContent='Administração';}modal.close();return;}
     if(action==='logout-register'){event.preventDefault();event.stopImmediatePropagation();saveSession(null);account=null;accountId=null;authIntent=null;modal.close();openLogin();return;}
     if(action==='save-commission'){event.preventDefault();event.stopImmediatePropagation();const rate=Number(modalBody.querySelector('#commissionRate')?.value);if(!Number.isFinite(rate)||rate<0||rate>100)return;try{await request('/rest/v1/platform_settings?key=eq.commission_percent',{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({value:rate})});await adminPanel();}catch(error){showError(error.message);}return;}
     if(action==='export-report'){event.preventDefault();event.stopImmediatePropagation();downloadReport();return;}
+    const cancelReservation=event.target.closest('[data-cancel-reservation]');
+    if(cancelReservation){
+      event.preventDefault();event.stopImmediatePropagation();
+      const orderId=cancelReservation.dataset.cancelReservation;
+      openModal('Cancelar reserva','Libera os lugares reservados para outra pessoa.',`<p class="form-note">Tem certeza de que deseja cancelar esta reserva?</p><div class="form-actions"><button class="button button-outline" data-close>Manter reserva</button><button class="button button-dark" data-confirm-cancel-reservation="${esc(orderId)}">Cancelar reserva</button></div>`);
+      return;
+    }
+    const confirmCancelReservation=event.target.closest('[data-confirm-cancel-reservation]');
+    if(confirmCancelReservation){
+      event.preventDefault();event.stopImmediatePropagation();
+      try{
+        await request('/rest/v1/rpc/cancel_my_reservation',{method:'POST',body:JSON.stringify({p_order_id:confirmCancelReservation.dataset.confirmCancelReservation})});
+        modal.close();await loadEvents();await loadOrders();showConfirmation('Reserva cancelada','Os lugares foram liberados','');
+      }catch(error){showError(error.message,'Cancelar reserva');}
+      return;
+    }
     const edit=event.target.closest('[data-edit-event]');if(edit){event.preventDefault();event.stopImmediatePropagation();editManagedEvent(edit.dataset.editEvent);return;}
     const cancel=event.target.closest('[data-delete-event]');if(cancel){event.preventDefault();event.stopImmediatePropagation();confirmDeleteEvent(cancel.dataset.deleteEvent);return;}
+    const approve=event.target.closest('[data-approve-organizer]');
+    if(approve){event.preventDefault();event.stopImmediatePropagation();try{await request('/rest/v1/rpc/approve_organizer',{method:'POST',body:JSON.stringify({p_user_id:approve.dataset.approveOrganizer})});await adminPanel();}catch(error){showError(error.message,'Aprovar organizador');}return;}
+    const suspend=event.target.closest('[data-suspend-organizer]');
+    if(suspend){event.preventDefault();event.stopImmediatePropagation();try{await request('/rest/v1/rpc/suspend_organizer',{method:'POST',body:JSON.stringify({p_user_id:suspend.dataset.suspendOrganizer})});await adminPanel();}catch(error){showError(error.message,'Suspender organizador');}return;}
+    const review=event.target.closest('[data-review-event]');
+    if(review){event.preventDefault();event.stopImmediatePropagation();const status=review.dataset.eventReviewStatus;try{await request('/rest/v1/rpc/review_event',{method:'POST',body:JSON.stringify({p_event_id:review.dataset.reviewEvent,p_status:status})});await loadEvents();await adminPanel();}catch(error){showError(error.message,'Revisão da atividade');}return;}
     const confirmed=event.target.closest('[data-confirm-delete]');if(confirmed){event.preventDefault();event.stopImmediatePropagation();try{await request(`/rest/v1/events?id=eq.${encodeURIComponent(confirmed.dataset.confirmDelete)}`,{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({status:'cancelled'})});modal.close();await loadEvents();await adminPanel();}catch(error){showError(error.message);}return;}
     const mark=event.target.closest('[data-mark-paid]');if(mark){event.preventDefault();event.stopImmediatePropagation();confirmOrderPayment(mark.dataset.markPaid);return;}
     const paid=event.target.closest('[data-confirm-paid]');if(paid){event.preventDefault();event.stopImmediatePropagation();const order=orders.find(row=>row.reference===paid.dataset.confirmPaid);if(!order)return;try{await request(`/rest/v1/ticket_orders?id=eq.${encodeURIComponent(order.id)}`,{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({status:'paid',paid_at:new Date().toISOString()})});modal.close();await adminPanel();}catch(error){showError(error.message);}return;}
