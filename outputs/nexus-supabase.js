@@ -161,9 +161,9 @@
       if (mine.length) content += `<h3 class="report-heading">Os seus pedidos e ingressos</h3><div class="dashboard-list">${mine.map(item=>{
         const methodLabel=paymentMethodLabel(item.paymentMethod);
         if(item.status==='paid'){
-          return `<div class="dashboard-item"><div><strong>${esc(item.eventTitle)}</strong><span style="display:block;margin-top:4px">${item.quantity} ingresso(s) · ${esc(item.reference)}</span><strong style="display:block;margin-top:7px">Ingresso digital: ${esc(item.digitalTicketCode||item.reference)}</strong></div><button class="button button-dark" data-show-ticket="${esc(item.id)}">Ver / imprimir ingresso</button></div>`;
+          return `<button type="button" class="receipt-card paid" data-download-pdf="${esc(item.id)}"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span>Ingresso digital: ${esc(item.digitalTicketCode||item.reference)}</span><span class="receipt-status">✓ Pago — clicar para baixar PDF</span></button>`;
         }
-        return `<div class="dashboard-item"><div><strong>${esc(item.eventTitle)}</strong><span style="display:block;margin-top:4px">${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span style="display:block;margin-top:4px">${esc(methodLabel)} · Aguardando pagamento</span></div>${item.status==='reserved'?`<button class="button button-outline" data-cancel-reservation="${esc(item.id)}">Cancelar</button>`:'<strong>Pendente</strong>'}</div>`;
+        return `<button type="button" class="receipt-card pending" data-download-pdf="${esc(item.id)}"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span>${esc(methodLabel)}</span><span class="receipt-status">● Comprovativo pendente — clicar para baixar PDF</span></button>`;
       }).join('')}</div>`;
       content += `<div class="form-actions"><button class="button button-outline" data-action="logout">Sair da conta</button></div>`;
       openModal('A sua conta', 'Dados e atividade guardados na plataforma.', content);
@@ -319,6 +319,24 @@
       dinheiro:'Dinheiro / local'
     }[method] || 'Método por confirmar';
   }
+  function downloadOrderPdf(orderId) {
+    const order = orders.find(item => item.id === orderId);
+    if (!order) return;
+    const paid = order.status === 'paid';
+    const title = paid ? 'COMPROVATIVO DE PAGAMENTO E INGRESSO DIGITAL' : 'COMPROVATIVO DE COMPRA - PAGAMENTO PENDENTE';
+    const color = paid ? '#2d8a57' : '#d84b43';
+    const status = paid ? 'PAGO' : 'PENDENTE';
+    const ticketCode = paid ? (order.digitalTicketCode || order.reference) : 'O código será emitido após confirmação';
+    const pdfWindow = window.open('', '_blank');
+    if (!pdfWindow) {
+      showError('Permita pop-ups para baixar o comprovativo em PDF.');
+      return;
+    }
+    pdfWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(order.reference)}</title><style>
+      body{font-family:Arial,sans-serif;margin:40px;color:#192522}.sheet{max-width:720px;margin:auto;border:3px solid ${color};border-radius:14px;padding:28px}.header{border-bottom:1px solid #dfe5df;padding-bottom:18px}.header h1{font-size:22px;margin:0 0 8px}.status{display:inline-block;background:${color};color:white;padding:8px 12px;border-radius:7px;font-weight:bold}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:22px 0}.box{border:1px solid #dde5df;border-radius:8px;padding:14px}.box small{display:block;color:#687570;margin-bottom:5px}.code{text-align:center;font-size:24px;font-weight:bold;border:2px dashed ${color};border-radius:8px;padding:18px;margin:20px 0}.footer{font-size:11px;color:#687570;text-align:center;margin-top:24px}@media print{body{margin:0}.sheet{max-width:none;margin:0;border-width:3px}}
+    </style></head><body><div class="sheet"><div class="header"><h1>NEXUS EVENTOS</h1><div class="status">${status}</div></div><h2>${esc(title)}</h2><div class="grid"><div class="box"><small>Evento</small><strong>${esc(order.eventTitle)}</strong></div><div class="box"><small>Participante</small><strong>${esc(order.name||account?.name||'Participante')}</strong></div><div class="box"><small>Quantidade</small><strong>${order.quantity} ingresso(s)</strong></div><div class="box"><small>Total</small><strong>${currency(order.total)}</strong></div><div class="box"><small>Referência da compra</small><strong>${esc(order.reference)}</strong></div><div class="box"><small>Método</small><strong>${esc(paymentMethodLabel(order.paymentMethod))}</strong></div></div>${order.paymentReference?`<div class="box"><small>Referência ou comprovativo informado</small><strong>${esc(order.paymentReference)}</strong></div>`:''}<div class="code">${esc(ticketCode)}</div><div class="footer">${paid?'Apresente este comprovativo impresso ou no telemóvel na entrada.':'Não apresenta ingresso digital enquanto o pagamento estiver pendente.'}<br>Emitido pela plataforma NEXUS EVENTOS.</div></div><script>window.onload=()=>{window.print()};<\\/script></body></html>`);
+    pdfWindow.document.close();
+  }
   function showPaidTicket(orderId) {
     const order = orders.find(item => item.id === orderId);
     if (!order || order.status !== 'paid') {
@@ -417,6 +435,8 @@
     const mark=event.target.closest('[data-mark-paid]');if(mark){event.preventDefault();event.stopImmediatePropagation();confirmOrderPayment(mark.dataset.markPaid);return;}
     const showTicket=event.target.closest('[data-show-ticket]');
     if(showTicket){event.preventDefault();event.stopImmediatePropagation();showPaidTicket(showTicket.dataset.showTicket);return;}
+    const downloadPdf=event.target.closest('[data-download-pdf]');
+    if(downloadPdf){event.preventDefault();event.stopImmediatePropagation();downloadOrderPdf(downloadPdf.dataset.downloadPdf);return;}
     const printTicket=event.target.closest('[data-print-ticket]');
     if(printTicket){event.preventDefault();event.stopImmediatePropagation();window.print();return;}
     const printReceipt=event.target.closest('[data-print-receipt]');
