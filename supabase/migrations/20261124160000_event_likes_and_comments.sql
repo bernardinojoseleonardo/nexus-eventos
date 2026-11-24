@@ -57,3 +57,66 @@ drop policy if exists "users delete own event comments" on public.event_comments
 create policy "users delete own event comments"
 on public.event_comments for delete to authenticated
 using (user_id = (select auth.uid()) or public.is_admin());
+
+create or replace function public.toggle_event_like(p_event_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+  exists_like boolean;
+begin
+  if actor_id is null then
+    raise exception 'Entre na sua conta para deixar um gosto';
+  end;
+  if not exists (select 1 from public.events where id = p_event_id and status = 'published') then
+    raise exception 'Evento não encontrado';
+  end;
+
+  select exists(select 1 from public.event_likes where event_id = p_event_id and user_id = actor_id) into exists_like;
+  if exists_like then
+    delete from public.event_likes where event_id = p_event_id and user_id = actor_id;
+    return false;
+  end if;
+  insert into public.event_likes(event_id,user_id) values(p_event_id,actor_id)
+  on conflict(event_id,user_id) do nothing;
+  return true;
+end;
+$$;
+
+create or replace function public.add_event_comment(p_event_id uuid,p_content text)
+returns public.event_comments
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+  profile_name text;
+  created public.event_comments%rowtype;
+begin
+  if actor_id is null then
+    raise exception 'Entre na sua conta para comentar';
+  end;
+  if char_length(trim(coalesce(p_content,''))) between 1 and 500 then
+    null;
+  else
+    raise exception 'Escreva um comentário entre 1 e 500 caracteres';
+  end;
+  if not exists (select 1 from public.events where id = p_event_id and status = 'published') then
+    raise exception 'Evento não encontrado';
+  end;
+  select coalesce(full_name,'Participante') into profile_name from public.profiles where id=actor_id;
+  insert into public.event_comments(event_id,user_id,author_name,status,content)
+  values(p_event_id,actor_id,coalesce(profile_name,'Participante'),'visible',trim(p_content))
+  returning * into created;
+  return created;
+end;
+$$;
+
+revoke all on function public.toggle_event_like(uuid) from public,anon;
+revoke all on function public.add_event_comment(uuid,text) from public,anon;
+grant execute on function public.toggle_event_like(uuid) to authenticated;
+grant execute on function public.add_event_comment(uuid,text) to authenticated;
