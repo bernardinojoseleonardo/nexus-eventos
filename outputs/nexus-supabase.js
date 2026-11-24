@@ -69,11 +69,6 @@
     adminSession = profile.role === 'admin';
     const label = document.querySelector('#accountButton span'); if (label) label.textContent = account?.name || 'Entrar';
     const logout = document.getElementById('logoutButton'); if (logout) logout.style.display = account ? 'inline-flex' : 'none';
-    const adminButton = document.getElementById('adminButton');
-    if (adminButton) {
-      adminButton.style.display = 'inline-flex';
-      adminButton.textContent = profile.role === 'admin' ? 'Painel admin' : 'Administração';
-    }
   }
   function publicProfilePhoto(path) {
     return `${apiUrl}/storage/v1/object/public/organizer-profile-photos/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -156,7 +151,6 @@
       const own = customEvents.filter(item => item.organizer === account.id);
       const mine = orders.filter(item => account.rawRole === 'admin' || item.email === account.email);
       let content = `<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email)} · ${esc(account.role)}</small></div></div>`;
-      if (account.rawRole === 'admin') content += `<div class="form-actions"><button class="button button-dark" data-action="admin">Abrir painel de administração</button></div>`;
       if (account.rawRole === 'organizer' || account.rawRole === 'admin') content += `<h3 class="report-heading">Os seus eventos</h3>${own.length ? `<div class="dashboard-list">${own.map(item=>`<div class="dashboard-item"><strong>${esc(item.title)}</strong><span>${money(item.price)} · ${esc(item.place)}</span></div>`).join('')}</div>` : '<p class="form-note">Ainda não publicou eventos.</p>'}<button class="button button-dark" data-action="publish">Criar evento</button>`;
       if (mine.length) content += `<h3 class="report-heading">Os seus pedidos e ingressos</h3><div class="dashboard-list">${mine.map(item=>{
         const methodLabel=paymentMethodLabel(item.paymentMethod);
@@ -402,8 +396,7 @@
     if(auth){event.preventDefault();event.stopImmediatePropagation();authForm(auth);return;}
     if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();if(!account)openLogin();return;}
     if(event.target.closest('[data-action="publish"]')||['admin-new'].includes(action)){event.preventDefault();event.stopImmediatePropagation();publishEvent();return;}
-    if(action==='admin'){event.preventDefault();event.stopImmediatePropagation();if(account?.rawRole==='admin')adminPanel();else if(account)organizerPanel();else{authIntent='admin';openLogin();}return;}
-    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';const adminButton=document.getElementById('adminButton');if(adminButton){adminButton.style.display='inline-flex';adminButton.textContent='Administração';}modal.close();return;}
+    if(action==='admin-logout'||action==='logout'){event.preventDefault();event.stopImmediatePropagation();try{await request('/auth/v1/logout',{method:'POST'});}catch{}saveSession(null);account=null;accountId=null;adminSession=false;orders=[];authIntent=null;document.querySelector('#accountButton span').textContent='Entrar';document.getElementById('logoutButton').style.display='none';modal.close();return;}
     if(action==='logout-register'){event.preventDefault();event.stopImmediatePropagation();saveSession(null);account=null;accountId=null;authIntent=null;modal.close();openLogin();return;}
     if(action==='save-commission'){event.preventDefault();event.stopImmediatePropagation();const rate=Number(modalBody.querySelector('#commissionRate')?.value);if(!Number.isFinite(rate)||rate<0||rate>100)return;try{await request('/rest/v1/platform_settings?key=eq.commission_percent',{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({value:rate})});await adminPanel();}catch(error){showError(error.message);}return;}
     if(action==='export-report'){event.preventDefault();event.stopImmediatePropagation();downloadReport();return;}

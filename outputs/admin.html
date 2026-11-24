@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>NEXUS — Administração privada</title>
+  <style>
+    :root{--green:#073e39;--gold:#d7ae55;--paper:#f4f6f2;--ink:#192522;--line:#dde5de;--red:#b94a42;--green2:#2d8a57}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--paper);color:var(--ink)}
+    .login-shell{min-height:100vh;display:grid;place-items:center;padding:24px}.login-box{width:min(420px,100%);background:white;border:1px solid var(--line);border-radius:14px;padding:28px;box-shadow:0 20px 60px rgba(7,62,57,.12)}
+    .brand-mark{width:64px;height:64px;border-radius:12px;background:var(--green);color:var(--gold);display:grid;place-items:center;font-size:28px;font-weight:800}.login-box h1{font-size:24px;margin:18px 0 6px}.login-box p{color:#687570;font-size:13px}.field{display:grid;gap:7px;margin-top:14px}.field label{font-size:12px;font-weight:bold}.field input{height:44px;border:1px solid var(--line);border-radius:8px;padding:10px 12px}.button{border:0;border-radius:8px;padding:11px 14px;font-weight:bold;cursor:pointer}.button-primary{background:var(--green);color:white;width:100%;margin-top:18px}.error{display:none;margin-top:12px;border:1px solid #efbbb6;background:#fff4f3;color:#84352f;padding:10px;border-radius:8px;font-size:12px}
+    .app{display:none;min-height:100vh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:230px;background:var(--green);color:white;padding:22px}.sidebar h2{font-size:16px;margin:12px 0 26px}.side-link{width:100%;display:block;border:0;background:transparent;color:#d7e4df;text-align:left;padding:12px;border-radius:7px;margin:3px 0;cursor:pointer}.side-link:hover,.side-link.active{background:rgba(255,255,255,.10);color:white}.main{margin-left:230px;padding:28px}.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.topbar h1{font-size:24px;margin:0}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}.metric{background:white;border:1px solid var(--line);border-radius:10px;padding:16px}.metric small{color:#687570}.metric strong{display:block;font-size:24px;margin-top:7px}.panel{display:none;background:white;border:1px solid var(--line);border-radius:10px;padding:18px}.panel.active{display:block}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:12px}.table th,.table td{border-bottom:1px solid #edf1ec;padding:11px;text-align:left}.table th{background:#f5f7f4}.action{border:1px solid #dce5de;background:white;border-radius:6px;padding:7px 9px;margin:2px;font-weight:bold;cursor:pointer}.action.approve,.action.pay{background:var(--green);color:white}.action.reject,.action.suspend{border-color:#efbbb6;color:#9b3a33}.tag{display:inline-block;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:bold}.tag.pending{background:#fff0ee;color:#9b3a33}.tag.approved,.tag.paid{background:#edf8f1;color:#286d48}.tag.suspended,.tag.cancelled{background:#edf0ed;color:#687570}
+    @media(max-width:900px){.sidebar{position:static;width:100%;height:auto}.main{margin-left:0}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.app{display:none}.app.mobile-ready{display:block}}
+  </style>
+</head>
+<body>
+  <section class="login-shell" id="loginScreen">
+    <form class="login-box" id="loginForm">
+      <div class="brand-mark">N</div><h1>Área administrativa</h1><p>Acesso reservado à administração da NEXUS.</p>
+      <div class="field"><label for="email">E-mail</label><input id="email" type="email" autocomplete="username" required></div>
+      <div class="field"><label for="password">Palavra-passe</label><input id="password" type="password" autocomplete="current-password" required></div>
+      <div class="error" id="loginError"></div><button class="button button-primary" type="submit">Entrar no painel</button>
+    </form>
+  </section>
+  <section class="app" id="app">
+    <aside class="sidebar"><div class="brand-mark">N</div><h2>NEXUS ADMIN</h2><button class="side-link active" data-panel="overview">Visão geral</button><button class="side-link" data-panel="organizers">Organizadores</button><button class="side-link" data-panel="events">Eventos</button><button class="side-link" data-panel="orders">Pedidos e pagamentos</button><button class="side-link" id="logout">Sair</button></aside>
+    <main class="main"><div class="topbar"><h1 id="pageTitle">Visão geral</h1><small id="adminName"></small></div><div class="metrics" id="metrics"></div>
+      <section class="panel active" id="overview"><h3>Resumo operacional</h3><div id="overviewContent"></div></section>
+      <section class="panel" id="organizers"><h3>Cadastros de organizadores</h3><div class="table-wrap" id="organizerTable"></div></section>
+      <section class="panel" id="events"><h3>Gestão de eventos</h3><div class="table-wrap" id="eventTable"></div></section>
+      <section class="panel" id="orders"><h3>Pedidos e comprovativos</h3><div class="table-wrap" id="orderTable"></div></section>
+    </main>
+  </section>
+  <script src="nexus-config.js"></script>
+  <script src="nexus-admin.js"></script>
+</body>
+</html>
