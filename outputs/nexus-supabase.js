@@ -132,6 +132,31 @@
       paymentMethod: row.payment_method || '', paymentReference: row.payment_reference || '',
       digitalTicketCode: row.digital_ticket_code || '', ticketIssuedAt: row.ticket_issued_at || '' }));
   }
+  async function loadEventSocial(eventId) {
+    const [likes, myLikes, comments] = await Promise.all([
+      request('/rest/v1/event_likes?select=user_id&event_id=eq.'+encodeURIComponent(eventId), {}, false).catch(()=>[]),
+      account ? request('/rest/v1/event_likes?select=user_id&event_id=eq.'+encodeURIComponent(eventId)+'&user_id=eq.'+encodeURIComponent(account.id), {}, true).catch(()=>[]) : Promise.resolve([]),
+      request('/rest/v1/event_comments?select=id,user_id,author_name,content,created_at&event_id=eq.'+encodeURIComponent(eventId)+'&status=eq.visible&order=created_at.desc&limit=100', {}, false).catch(()=>[])
+    ]);
+    return { likeCount:(likes||[]).length, liked:Boolean(myLikes?.length), comments:comments||[] };
+  }
+  async function toggleEventLike(eventId) {
+    if (!account) { authIntent='social'; openLogin(); return null; }
+    const social=await loadEventSocial(eventId);
+    if (social.liked) {
+      await request('/rest/v1/event_likes?event_id=eq.'+encodeURIComponent(eventId)+'&user_id=eq.'+encodeURIComponent(account.id), {method:'DELETE',headers:{Prefer:'return=minimal'}});
+    } else {
+      await request('/rest/v1/event_likes',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({event_id:eventId,user_id:account.id})});
+    }
+    return loadEventSocial(eventId);
+  }
+  async function submitEventComment(eventId, content) {
+    if (!account) { authIntent='social'; openLogin(); return null; }
+    const clean=content.trim();
+    if (clean.length < 1 || clean.length > 500) throw new Error('Escreva um comentário entre 1 e 500 caracteres.');
+    await request('/rest/v1/event_comments',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({event_id:eventId,user_id:account.id,author_name:account.name,status:'visible',content:clean})});
+    return loadEventSocial(eventId);
+  }
   function authForm(mode) {
     if (mode === 'register-participant' || mode === 'register-organizer') {
       const role = mode === 'register-organizer' ? 'organizer' : 'participant';
@@ -454,14 +479,16 @@
     count.textContent=`${shown.length} ${shown.length===1?'evento':'eventos'} publicados`;
     grid.innerHTML=shown.length?shown.map(event=>{const photos=galleryFor(event),cover=photos[0]?.src;return `<article class="event-card"><button type="button" class="event-cover ${esc(event.cover)}${cover?' has-photo':''}" data-view-event="${esc(event.id)}" aria-label="Abrir detalhes e galeria de ${esc(event.title)}">${cover?`<img class="cover-photo" src="${esc(cover)}" alt="">`:''}<span class="cover-category">${esc(event.tag)}</span><svg class="icon cover-icon"><use href="#${esc(event.icon)}"/></svg><span class="cover-date">${esc(event.date)}</span></button><div class="event-info"><div class="event-place"><svg class="icon"><use href="#i-pin"/></svg>${esc(event.place)}</div><h3 class="event-title">${esc(event.title)}</h3><div class="event-bottom"><div><span class="price-label">A partir de</span><span class="price">${money(event.price)}</span></div><div class="card-actions"><button class="ticket-button" data-buy="${esc(event.id)}">Ingressos <svg class="icon"><use href="#i-arrow"/></svg></button></div></div></div></article>`}).join(''):'<div class="empty-state">Ainda não há eventos publicados. Volte em breve para descobrir novas experiências.</div>';
   }
-  function showEventDetails(eventId) {
+  async function showEventDetails(eventId) {
     const event = allEvents().find(item => item.id === eventId);
     if (!event) return;
+    const social=await loadEventSocial(eventId);
     const organizer = event.organizerName || event.organizerPhone || event.organizerPhotoUrl ? `<div class="event-organizer">${event.organizerPhotoUrl ? `<img src="${esc(event.organizerPhotoUrl)}" alt="${esc(event.organizerName||'Organizador')}">` : ''}<div><strong>${esc(event.organizerName||'Organizador')}</strong><small>Organizador do evento</small>${event.organizerPhone ? `<a href="tel:${esc(event.organizerPhone.replace(/[^\d+]/g,''))}">${esc(event.organizerPhone)}</a>` : ''}</div></div>` : '';
     const media = (event.images || []).map(item => item.type === 'video'
       ? `<div class="detail-photo"><video controls preload="metadata" style="width:100%;height:200px;object-fit:cover"><source src="${esc(item.src)}"></video><span>${esc(item.label||'Vídeo do evento')}</span></div>`
       : `<button type="button" class="detail-photo" data-full-image="${esc(item.src)}"><img src="${esc(item.src)}" alt="${esc(item.label||'Imagem do evento')}"><span>${esc(item.label||'Imagem do evento')}</span></button>`).join('');
-    openModal('Detalhes do evento', `${event.category} · ${event.date} · ${event.place}`, `<p style="font-size:14px;line-height:1.65;color:#53615b">${esc(event.description||'Veja os detalhes, imagens e vídeos deste evento.')}</p>${organizer}${media ? `<div class="detail-gallery">${media}</div>` : '<p class="form-note">Ainda não há imagens ou vídeos neste evento.</p>'}<div class="event-bottom"><div><span class="price-label">Ingresso a partir de</span><span class="price">${money(event.price)}</span></div><button class="button button-dark" data-buy="${esc(event.id)}">Ver ingressos</button></div>`);
+    const comments=social.comments.length ? social.comments.map(comment=>`<div class="dashboard-item"><div><strong>${esc(comment.author_name||'Participante')}</strong><span style="display:block;margin-top:4px">${esc(comment.content)}</span><small style="display:block;margin-top:5px;color:#687570">${esc(formatDate(comment.created_at))}</small></div></div>`).join('') : '<p class="form-note">Ainda não há comentários. Seja o primeiro a comentar.</p>';
+    openModal('Detalhes do evento', `${event.category} · ${event.date} · ${event.place}`, `<p style="font-size:14px;line-height:1.65;color:#53615b">${esc(event.description||'Veja os detalhes, imagens e vídeos deste evento.')}</p>${organizer}${media ? `<div class="detail-gallery">${media}</div>` : '<p class="form-note">Ainda não há imagens ou vídeos neste evento.</p>'}<div class="event-bottom"><div><span class="price-label">Ingresso a partir de</span><span class="price">${money(event.price)}</span></div><button class="button button-dark" data-buy="${esc(event.id)}">Ver ingressos</button></div><h3 class="report-heading">Gostos e comentários</h3><div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="button ${social.liked?'button-dark':'button-outline'}" data-toggle-event-like="${esc(eventId)}">${social.liked?'♥ Gosto':'♡ Gostar'} · ${social.likeCount}</button></div><form data-form="event-comment" data-event-id="${esc(eventId)}"><div class="field full"><label for="eventComment">Deixe um comentário</label><textarea id="eventComment" name="comment" maxlength="500" required placeholder="Partilhe a sua opinião sobre este evento"></textarea></div><div class="form-actions"><button class="button button-dark" type="submit">Publicar comentário</button></div></form><div class="dashboard-list" style="margin-top:12px">${comments}</div>`);
   }
   window.renderEvents = renderEvents;
   document.addEventListener('click', async event => {
@@ -515,6 +542,15 @@
     if(showTicket){event.preventDefault();event.stopImmediatePropagation();showPaidTicket(showTicket.dataset.showTicket);return;}
     const downloadPdf=event.target.closest('[data-download-pdf]');
     if(downloadPdf){event.preventDefault();event.stopImmediatePropagation();downloadOrderPdf(downloadPdf.dataset.downloadPdf);return;}
+    const toggleLike=event.target.closest('[data-toggle-event-like]');
+    if(toggleLike){
+      event.preventDefault();event.stopImmediatePropagation();
+      try{
+        await toggleEventLike(toggleLike.dataset.toggleEventLike);
+        await showEventDetails(toggleLike.dataset.toggleEventLike);
+      }catch(error){showError(error.message,'Gostar do evento')}
+      return;
+    }
     const printTicket=event.target.closest('[data-print-ticket]');
     if(printTicket){event.preventDefault();event.stopImmediatePropagation();window.print();return;}
     const printReceipt=event.target.closest('[data-print-receipt]');
@@ -534,7 +570,7 @@
   }, true);
   document.addEventListener('submit', async event => {
     const form=event.target.closest('form[data-form]');if(!form)return;
-    const kind=form.dataset.form;if(!['register','login','password-recovery-request','password-update','event','edit-event','checkout'].includes(kind))return;
+    const kind=form.dataset.form;if(!['register','login','password-recovery-request','password-update','event','edit-event','checkout','event-comment'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
     try{
       if(kind==='register'){
@@ -553,6 +589,10 @@
         await loadAccount();openModal('Palavra-passe atualizada','A sua conta já pode ser usada normalmente.',`<div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
       } else if(kind==='event'||kind==='edit-event'){
         const id=kind==='edit-event'?form.dataset.eventId:null;await saveEvent(data,id);
+      } else if(kind==='event-comment'){
+        if(!account){authIntent='social';openLogin();return;}
+        await submitEventComment(form.dataset.eventId, data.comment);
+        await showEventDetails(form.dataset.eventId);
       } else if(kind==='checkout'){
         if(!account||!selectedEvent)throw new Error('Entre na sua conta antes de reservar.');
         const quantity=Number(data.quantity||1);
