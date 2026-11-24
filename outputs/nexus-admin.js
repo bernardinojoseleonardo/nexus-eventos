@@ -55,7 +55,7 @@
     }catch{sessionSave(null)}
   }
   function showApp(){ $('#loginScreen').style.display='none';$('#app').style.display='block';$('#app').classList.add('mobile-ready');$('#adminName').textContent=account.full_name||account.email;refresh();}
-  $('#loginForm').addEventListener('submit',async event=>{event.preventDefault();const error=$('#loginError');error.style.display='none';try{await authenticate($('#email').value.trim().toLower(),$('#password').value);showApp()}catch(e){error.style.display='block';error.textContent=e.message}});
+  $('#loginForm').addEventListener('submit',async event=>{event.preventDefault();const error=$('#loginError');error.style.display='none';try{await authenticate($('#email').value.trim().toLowerCase(),$('#password').value);showApp()}catch(e){error.style.display='block';error.textContent=e.message}});
   $('#logout').addEventListener('click',()=>{sessionSave(null);location.reload()});
   document.addEventListener('click',async event=>{
     const panel=event.target.closest('[data-panel]');if(panel){document.querySelectorAll('.side-link').forEach(b=>b.classList.remove('active'));panel.classList.add('active');document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));$('#'+panel.dataset.panel).classList.add('active');$('#pageTitle').textContent=panel.textContent.trim();return}
