@@ -9,6 +9,7 @@
   let session = readSession();
   let accountId = null;
   let authIntent = null;
+  let pendingEventVideos = [];
   const styleFor = category => categoryStyle[category] || categoryStyle.Festas;
   const roleLabel = role => role === 'organizer' ? 'organizador' : role === 'admin' ? 'administrador' : 'participante';
   const currentToken = () => session?.access_token || config.publishableKey;
@@ -82,6 +83,15 @@
       return location?.startsWith('http') ? location : `${apiUrl}/storage/v1${location}`;
     } catch { return ''; }
   }
+  async function signedEventMedia(path) {
+    try {
+      const result = await request(`/storage/v1/object/sign/event-media/${path.split('/').map(encodeURIComponent).join('/')}`, {
+        method: 'POST', body: JSON.stringify({ expiresIn: 3600 })
+      }, false);
+      const location = result.signedURL || result.signedUrl;
+      return location?.startsWith('http') ? location : `${apiUrl}/storage/v1${location}`;
+    } catch { return ''; }
+  }
   function mapEvent(row, images = []) {
     const style = styleFor(row.category), dateValue = row.starts_at ? new Date(row.starts_at).toISOString().slice(0, 16) : '';
     return { id: row.id, title: row.title, category: row.category, date: formatDate(row.starts_at), dateValue,
@@ -90,7 +100,7 @@
       images, cover: style[0], icon: style[1], tag: style[2], organizer: row.organizer_id, status: row.status };
   }
   async function loadEvents() {
-    const rows = await request('/rest/v1/events?select=*,event_images(*)&status=eq.published&order=starts_at.asc', {}, false);
+    const rows = await request('/rest/v1/events?select=*,event_images(*),event_media(*)&status=eq.published&order=starts_at.asc', {}, false);
     let availability = new Map();
     try {
       const availabilityRows = await request('/rest/v1/rpc/get_public_event_availability', { method: 'POST', body: '{}' }, false);
@@ -102,7 +112,10 @@
       const images = await Promise.all((row.event_images || []).sort((a,b) => a.position - b.position).map(async photo => ({
         src: await signedImage(photo.object_path), label: photo.label, path: photo.object_path
       })));
-      const event = mapEvent(row, images.filter(photo => photo.src));
+      const videos = await Promise.all((row.event_media || []).filter(media => media.media_type === 'video').sort((a,b) => a.position - b.position).map(async media => ({
+        src: await signedEventMedia(media.object_path), label: media.label || 'Vídeo do evento', path: media.object_path, type: 'video'
+      })));
+      const event = mapEvent(row, [...images.filter(photo => photo.src), ...videos.filter(video => video.src)]);
       event.remaining = availability.has(event.id) ? availability.get(event.id) : event.quantity;
       return event;
     }));
@@ -186,6 +199,7 @@
       return;
     }
     pendingEventImages = [];
+    pendingEventVideos = [];
     const organizerFields = account.rawRole !== 'admin' ? `${account.profileHasName ? '' : `<div class="field"><label for="organizerName">Nome do organizador</label><input id="organizerName" name="organizer_name" required maxlength="80" placeholder="O nome que aparecerá no anúncio"></div>`}<div class="field"><label for="organizerContactPhone">Telefone de contacto</label><input id="organizerContactPhone" name="contact_phone" type="tel" value="${esc(account.phone)}" required maxlength="30"></div>
       ${account.identitySubmitted ? '<p class="form-note full">Dados de identificação recebidos e reservados à administração.</p>' : '<div class="field"><label for="organizerBi">Número do BI</label><input id="organizerBi" name="bi_number" required maxlength="32" autocomplete="off"></div>'}
       <div class="field full"><label for="organizerPhoto">Foto de perfil do organizador</label><input id="organizerPhoto" name="organizer_photo" type="file" accept="image/jpeg,image/png,image/webp" ${account.profilePhotoPath ? '' : 'required'}><span class="help">Esta foto e o telefone aparecem no anúncio. O BI fica reservado à administração.</span>${account.profilePhotoUrl ? `<img src="${esc(account.profilePhotoUrl)}" alt="Foto atual do organizador" style="width:84px;height:84px;object-fit:cover;border-radius:50%;margin-top:8px">` : ''}</div>` : '';
@@ -198,9 +212,58 @@
       <div class="field"><label for="eventPrice">Preço por ingresso (Kz)</label><input id="eventPrice" name="price" type="number" min="0" step="500" value="5000" required></div>
       <div class="field"><label for="eventQuantity">Quantidade</label><input id="eventQuantity" name="quantity" type="number" min="1" max="100000" value="100" required></div>
       <div class="field full"><label for="eventImage">Flyers e fotografias (até 5)</label><input id="eventImage" name="images" type="file" multiple accept="image/jpeg,image/png,image/webp"><span class="help">JPG, PNG ou WEBP, até 10 MB por imagem.</span><div class="upload-gallery" id="eventImagePreview"></div><span class="help" id="uploadMessage" aria-live="polite"></span></div>
+      <div class="field full"><label for="eventVideo">Vídeos do evento (até 2)</label><input id="eventVideo" name="videos" type="file" multiple accept="video/mp4,video/webm,video/quicktime"><span class="help">MP4, WEBM ou MOV, até 100 MB por vídeo.</span><div class="upload-gallery" id="eventVideoPreview"></div><span class="help" id="videoUploadMessage" aria-live="polite"></span></div>
       <div class="field full"><label for="eventDescription">Descrição</label><textarea id="eventDescription" name="description" maxlength="500"></textarea></div></div>
       <p class="form-note">As reservas são registadas como pendentes. Pagamentos online ainda não estão integrados.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Publicar evento</button></div></form>`);
+    const videoInput = modalBody.querySelector('#eventVideo');
+    videoInput?.addEventListener('change', () => {
+      const allowed = ['video/mp4','video/webm','video/quicktime'];
+      const selected = Array.from(videoInput.files || []).slice(0, 2);
+      pendingEventVideos = [];
+      for (const file of selected) {
+        if (!allowed.includes(file.type)) {
+          const message = modalBody.querySelector('#videoUploadMessage');
+          if (message) message.textContent = 'Formato inválido. Use MP4, WEBM ou MOV.';
+          videoInput.value = '';
+          return;
+        }
+        if (file.size > 100 * 1024 * 1024) {
+          const message = modalBody.querySelector('#videoUploadMessage');
+          if (message) message.textContent = 'O vídeo deve ter até 100 MB.';
+          videoInput.value = '';
+          return;
+        }
+        pendingEventVideos.push({ file, name: file.name, type: file.type, label: 'Vídeo do evento' });
+      }
+      const preview = modalBody.querySelector('#eventVideoPreview');
+      if (preview) preview.innerHTML = pendingEventVideos.map((video,index)=>`<div class="upload-thumb"><video controls preload="metadata" style="width:100%;height:95px;object-fit:cover"><source src="${esc(URL.createObjectURL(video.file))}" type="${esc(video.type)}"></video><button type="button" data-remove-video="${index}">Remover</button></div>`).join('');
+      const message = modalBody.querySelector('#videoUploadMessage');
+      if (message) message.textContent = pendingEventVideos.length ? `${pendingEventVideos.length} vídeo(s) pronto(s) para publicar.` : '';
+    });
   };
+  async function uploadEventVideos(eventId, videos) {
+    let position = 0;
+    for (const video of videos) {
+      const objectPath = `${account.id}/${eventId}/${crypto.randomUUID()}-${video.name}`;
+      await request(`/storage/v1/object/event-media/${objectPath.split('/').map(encodeURIComponent).join('/')}`, {
+        method: 'POST',
+        headers: { 'Content-Type': video.type, 'x-upsert': 'false' },
+        body: video.file
+      });
+      await request('/rest/v1/event_media', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          event_id: eventId,
+          object_path: objectPath,
+          media_type: 'video',
+          label: video.label || 'Vídeo do evento',
+          position
+        })
+      });
+      position++;
+    }
+  }
   async function uploadImages(eventId, images) {
     let position = 0;
     for (const photo of images) {
@@ -261,7 +324,9 @@
     const saved = rows?.[0];
     if (!saved) throw new Error('O evento não foi guardado. Confirme se a sua conta tem acesso de organizador.');
     await uploadImages(saved.id, pendingEventImages);
+    await uploadEventVideos(saved.id, pendingEventVideos);
     pendingEventImages = [];
+    pendingEventVideos = [];
     await loadEvents(); modal.close(); document.getElementById('eventos').scrollIntoView({behavior:'smooth'});
     showConfirmation(
       old?'Evento atualizado':account.rawRole==='admin'?'Evento publicado':'Evento enviado',
@@ -389,9 +454,29 @@
     count.textContent=`${shown.length} ${shown.length===1?'evento':'eventos'} publicados`;
     grid.innerHTML=shown.length?shown.map(event=>{const photos=galleryFor(event),cover=photos[0]?.src;return `<article class="event-card"><button type="button" class="event-cover ${esc(event.cover)}${cover?' has-photo':''}" data-view-event="${esc(event.id)}" aria-label="Abrir detalhes e galeria de ${esc(event.title)}">${cover?`<img class="cover-photo" src="${esc(cover)}" alt="">`:''}<span class="cover-category">${esc(event.tag)}</span><svg class="icon cover-icon"><use href="#${esc(event.icon)}"/></svg><span class="cover-date">${esc(event.date)}</span></button><div class="event-info"><div class="event-place"><svg class="icon"><use href="#i-pin"/></svg>${esc(event.place)}</div><h3 class="event-title">${esc(event.title)}</h3><div class="event-bottom"><div><span class="price-label">A partir de</span><span class="price">${money(event.price)}</span></div><div class="card-actions"><button class="ticket-button" data-buy="${esc(event.id)}">Ingressos <svg class="icon"><use href="#i-arrow"/></svg></button></div></div></div></article>`}).join(''):'<div class="empty-state">Ainda não há eventos publicados. Volte em breve para descobrir novas experiências.</div>';
   }
+  function showEventDetails(eventId) {
+    const event = allEvents().find(item => item.id === eventId);
+    if (!event) return;
+    const organizer = event.organizerName || event.organizerPhone || event.organizerPhotoUrl ? `<div class="event-organizer">${event.organizerPhotoUrl ? `<img src="${esc(event.organizerPhotoUrl)}" alt="${esc(event.organizerName||'Organizador')}">` : ''}<div><strong>${esc(event.organizerName||'Organizador')}</strong><small>Organizador do evento</small>${event.organizerPhone ? `<a href="tel:${esc(event.organizerPhone.replace(/[^\d+]/g,''))}">${esc(event.organizerPhone)}</a>` : ''}</div></div>` : '';
+    const media = (event.images || []).map(item => item.type === 'video'
+      ? `<div class="detail-photo"><video controls preload="metadata" style="width:100%;height:200px;object-fit:cover"><source src="${esc(item.src)}"></video><span>${esc(item.label||'Vídeo do evento')}</span></div>`
+      : `<button type="button" class="detail-photo" data-full-image="${esc(item.src)}"><img src="${esc(item.src)}" alt="${esc(item.label||'Imagem do evento')}"><span>${esc(item.label||'Imagem do evento')}</span></button>`).join('');
+    openModal('Detalhes do evento', `${event.category} · ${event.date} · ${event.place}`, `<p style="font-size:14px;line-height:1.65;color:#53615b">${esc(event.description||'Veja os detalhes, imagens e vídeos deste evento.')}</p>${organizer}${media ? `<div class="detail-gallery">${media}</div>` : '<p class="form-note">Ainda não há imagens ou vídeos neste evento.</p>'}<div class="event-bottom"><div><span class="price-label">Ingresso a partir de</span><span class="price">${money(event.price)}</span></div><button class="button button-dark" data-buy="${esc(event.id)}">Ver ingressos</button></div>`);
+  }
   window.renderEvents = renderEvents;
   document.addEventListener('click', async event => {
     const actionTarget=event.target.closest('[data-action]'), action=actionTarget?.dataset.action;
+    const removeVideo=event.target.closest('[data-remove-video]');
+    if(removeVideo){
+      event.preventDefault();event.stopImmediatePropagation();
+      const index=Number(removeVideo.dataset.removeVideo);
+      pendingEventVideos.splice(index,1);
+      const preview=modalBody.querySelector('#eventVideoPreview');
+      if(preview)preview.innerHTML=pendingEventVideos.map((video,videoIndex)=>`<div class="upload-thumb"><video controls preload="metadata" style="width:100%;height:95px;object-fit:cover"><source src="${esc(URL.createObjectURL(video.file))}" type="${esc(video.type)}"></video><button type="button" data-remove-video="${videoIndex}">Remover</button></div>`).join('');
+      const input=modalBody.querySelector('#eventVideo');if(input)input.value='';
+      const message=modalBody.querySelector('#videoUploadMessage');if(message)message.textContent=pendingEventVideos.length?`${pendingEventVideos.length} vídeo(s) pronto(s).`:'Nenhum vídeo selecionado.';
+      return;
+    }
     const auth=event.target.closest('[data-auth]')?.dataset.auth;
     if(auth){event.preventDefault();event.stopImmediatePropagation();authForm(auth);return;}
     if(event.target.closest('[data-action="account"]')){event.preventDefault();event.stopImmediatePropagation();if(!account)openLogin();return;}
