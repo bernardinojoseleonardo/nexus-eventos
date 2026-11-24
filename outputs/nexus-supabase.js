@@ -16,6 +16,15 @@
   function readSession() { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } }
   function saveSession(value) { session = value; if (value) localStorage.setItem(sessionKey, JSON.stringify(value)); else localStorage.removeItem(sessionKey); }
   async function request(path, options = {}, useAuth = true, retry = true) {
+    if (useAuth && session?.access_token) {
+      try {
+        const payload=JSON.parse(atob(session.access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+        if (payload.exp && payload.exp*1000 <= Date.now()+30000 && session.refresh_token) {
+          const refreshed=await fetch(`${apiUrl}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:config.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});
+          if(refreshed.ok)saveSession(await refreshed.json());
+        }
+      } catch {}
+    }
     const headers = new Headers(options.headers || {});
     headers.set('apikey', config.publishableKey);
     headers.set('Authorization', `Bearer ${useAuth ? currentToken() : config.publishableKey}`);
