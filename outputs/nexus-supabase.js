@@ -10,11 +10,23 @@
   let accountId = null;
   let authIntent = null;
   let pendingEventVideos = [];
+  let publicationPayments = [];
   const styleFor = category => categoryStyle[category] || categoryStyle.Festas;
   const roleLabel = role => role === 'organizer' ? 'organizador' : role === 'admin' ? 'administrador' : 'participante';
   const currentToken = () => session?.access_token || config.publishableKey;
   function readSession() { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } }
   function saveSession(value) { session = value; if (value) localStorage.setItem(sessionKey, JSON.stringify(value)); else localStorage.removeItem(sessionKey); }
+  function normalizePhone(value) {
+    const input = value.trim();
+    const digits = input.replace(/\D/g, '');
+    let phone;
+    if (input.startsWith('+')) phone = `+${digits}`;
+    else if (digits.startsWith('00')) phone = `+${digits.slice(2)}`;
+    else if (digits.startsWith('244')) phone = `+${digits}`;
+    else phone = `+244${digits.replace(/^0/, '')}`;
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error('Introduza um número de telefone válido, incluindo o indicativo do país.');
+    return phone;
+  }
   async function request(path, options = {}, useAuth = true, retry = true) {
     if (useAuth && session?.access_token) {
       try {
@@ -29,7 +41,15 @@
     headers.set('apikey', config.publishableKey);
     headers.set('Authorization', `Bearer ${useAuth ? currentToken() : config.publishableKey}`);
     if (options.body && !(options.body instanceof Blob) && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-    const response = await fetch(`${apiUrl}${path}`, { ...options, headers });
+    let response;
+    try {
+      response = await fetch(`${apiUrl}${path}`, { ...options, headers });
+    } catch (error) {
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        throw new Error('Não foi possível ligar ao Supabase. Verifique a ligação à internet e a configuração do projeto.');
+      }
+      throw error;
+    }
     if (response.status === 401 && retry && session?.refresh_token) {
       const refreshed = await fetch(`${apiUrl}/auth/v1/token?grant_type=refresh_token`, {
         method: 'POST', headers: { apikey: config.publishableKey, 'Content-Type': 'application/json' },
@@ -136,8 +156,9 @@
     const filter = account.rawRole === 'admin' ? '' : `&buyer_id=eq.${encodeURIComponent(account.id)}`;
     const rows = await request(`/rest/v1/ticket_orders?select=*,events(title,venue)&order=created_at.desc${filter}`);
     orders = (rows || []).map(row => ({ reference: row.reference, eventId: row.event_id, eventTitle: row.events?.title || 'Evento',
-      email: row.buyer_email || account.email, name: row.buyer_name || account.name, quantity: row.quantity, total: Number(row.total),
-      status: row.status, createdAt: row.created_at, paidAt: row.paid_at, id: row.id,
+      email: row.buyer_email || '', name: row.buyer_name || account.name, quantity: row.quantity, total: Number(row.total),
+      status: row.expired_at || (row.status === 'reserved' && row.expires_at && Date.parse(row.expires_at) <= Date.now()) ? 'expired' : row.status,
+      expiresAt: row.expires_at || '', expiredAt: row.expired_at || '', createdAt: row.created_at, paidAt: row.paid_at, id: row.id,
       paymentMethod: row.payment_method || '', paymentReference: row.payment_reference || '',
       digitalTicketCode: row.digital_ticket_code || '', ticketIssuedAt: row.ticket_issued_at || '' }));
   }
@@ -173,25 +194,31 @@
   function authForm(mode) {
     if (mode === 'register-participant' || mode === 'register-organizer') {
       const role = mode === 'register-organizer' ? 'organizer' : 'participant';
-      openModal('Criar conta', role==='organizer'?'Crie a sua conta; o cadastro de organizador requer aprovação.':'Crie a sua conta para comprar ingressos e reservar lugares.', `<form data-form="register"><input type="hidden" name="role" value="${role}"><div class="form-grid">
-        <div class="field full"><label for="regName">Nome completo</label><input id="regName" name="name" required maxlength="80"></div>
-        <div class="field"><label for="regEmail">E-mail</label><input id="regEmail" name="email" type="email" required maxlength="120"></div>
-        <div class="field"><label for="regPhone">Telefone</label><input id="regPhone" name="phone" type="tel" maxlength="30"></div>
-        <div class="field full"><label for="regPassword">Palavra-passe</label><input id="regPassword" name="password" type="password" minlength="8" autocomplete="new-password" required></div>
-      </div><p class="form-note">Será usada a autenticação segura do Supabase. Pode ser necessário confirmar o e-mail.</p>
-      <div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Já tenho conta</button><button class="button button-dark" type="submit">Criar conta</button></div></form>`);
+      openModal('Criar conta', role==='organizer'?'Crie a sua conta de organizador.':'Crie a sua conta para comprar ingressos.', `<form class="auth-form" data-form="register"><input type="hidden" name="role" value="${role}">
+        <div class="field"><label for="regName">Nome completo</label><input id="regName" name="name" required maxlength="80" autocomplete="name" placeholder="O seu nome"></div>
+        <div class="field"><label for="regPhone">Telefone</label><input id="regPhone" name="phone" type="tel" required maxlength="30" autocomplete="tel" placeholder="+244 9xx xxx xxx"></div>
+        <div class="field"><label for="regPassword">Palavra-passe</label><input id="regPassword" name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="Mínimo de 8 caracteres"></div>
+        <p class="auth-note">Sem e-mail. Use este telefone para entrar novamente.</p>
+        <button class="button button-dark auth-submit" type="submit">Criar conta</button>
+        <div class="auth-footer"><span>Já tem conta?</span><button type="button" class="auth-link" data-auth="login">Entrar</button></div></form>`);
     } else if (mode === 'recover') {
-      openModal('Recuperar palavra-passe', 'Enviaremos um link para o e-mail da sua conta.', `<form data-form="password-recovery-request"><div class="field full"><label for="recoveryEmail">E-mail</label><input id="recoveryEmail" name="email" type="email" required autocomplete="email"></div><div class="form-actions"><button type="button" class="button button-outline" data-auth="login">Voltar</button><button class="button button-dark" type="submit">Enviar link</button></div></form>`);
+      openModal('Recuperar palavra-passe', 'Enviaremos um código SMS para o seu telefone.', `<form class="auth-form" data-form="password-recovery-request"><div class="field"><label for="recoveryPhone">Telefone</label><input id="recoveryPhone" name="phone" type="tel" required autocomplete="tel" placeholder="+244 9xx xxx xxx"></div><button class="button button-dark auth-submit" type="submit">Enviar código</button><div class="auth-footer"><span>Já se lembrou?</span><button type="button" class="auth-link" data-auth="login">Voltar para entrar</button></div></form>`);
     } else {
-      const roleChoices = '<button type="button" class="button button-outline" data-auth="register-participant">Criar conta como participante</button><button type="button" class="button button-outline" data-auth="register-organizer">Criar conta como organizador</button>';
-      openModal('Entrar na NEXUS', authIntent === 'publish' ? 'Entre na sua conta para publicar o evento.' : authIntent === 'checkout' ? 'Entre na sua conta para comprar ingressos.' : 'Entre na sua conta para aceder à plataforma.', `<form data-form="login"><div class="form-grid">
-        <div class="field full"><label for="loginEmail">E-mail</label><input id="loginEmail" name="email" type="email" required autocomplete="email"></div>
-        <div class="field full"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password"></div>
-      </div><div class="form-actions">${roleChoices}<button type="button" class="button button-outline" data-auth="recover">Esqueci a palavra-passe</button><button class="button button-dark" type="submit">Entrar</button></div></form>`);
+      const subtitle = authIntent === 'publish' ? 'Entre para publicar o seu evento.' : authIntent === 'checkout' ? 'Entre para comprar ingressos.' : 'Aceda à sua conta com o telefone.';
+      const roleChoices = '<div class="auth-role-actions"><button type="button" class="button button-outline" data-auth="register-participant">Criar conta cliente</button><button type="button" class="button button-outline" data-auth="register-organizer">Criar conta organizador</button></div>';
+      openModal('Entrar na NEXUS', subtitle, `<form class="auth-form" data-form="login">
+        <div class="field"><label for="loginPhone">Telefone</label><input id="loginPhone" name="phone" type="tel" required autocomplete="tel" placeholder="+244 9xx xxx xxx"></div>
+        <div class="field"><label for="loginPassword">Palavra-passe</label><input id="loginPassword" name="password" type="password" required autocomplete="current-password" placeholder="A sua palavra-passe"></div>
+        <div class="auth-recovery"><button type="button" class="auth-link" data-auth="recover">Esqueci a palavra-passe</button></div>
+        <button class="button button-dark auth-submit" type="submit">Entrar</button>
+        <div class="auth-footer"><span>Ainda não tem conta?</span>${roleChoices}</div></form>`);
     }
   }
   function openPasswordResetForm() {
     openModal('Criar nova palavra-passe', 'Escolha uma palavra-passe com pelo menos 8 caracteres.', `<form data-form="password-update"><div class="field full"><label for="newPassword">Nova palavra-passe</label><input id="newPassword" name="password" type="password" minlength="8" autocomplete="new-password" required></div><div class="form-actions"><button class="button button-dark" type="submit">Guardar palavra-passe</button></div></form>`);
+  }
+  function openPhoneRecoveryVerification(phone) {
+    openModal('Confirme o seu telefone', 'Introduza o código enviado por SMS para criar uma nova palavra-passe.', `<form class="auth-form" data-form="phone-recovery-verify"><input type="hidden" name="phone" value="${esc(phone)}"><div class="field"><label for="recoveryCode">Código SMS</label><input id="recoveryCode" name="token" inputmode="numeric" autocomplete="one-time-code" required></div><button class="button button-dark auth-submit" type="submit">Verificar código</button></form>`);
   }
   openRegistration = () => authForm('register-participant');
   function openLogin() { authForm('login'); }
@@ -199,16 +226,36 @@
     if (!account) { openLogin(); return; }
     try {
       await loadOrders();
+      publicationPayments=[];
+      if(account.rawRole==='organizer'||account.rawRole==='admin'){
+        const filter=account.rawRole==='admin'?'':'&organizer_id=eq.'+encodeURIComponent(account.id);
+        publicationPayments=await request('/rest/v1/event_publication_payments?select=*,events(title)&order=created_at.desc'+filter);
+      }
       const own = customEvents.filter(item => item.organizer === account.id);
-      const mine = orders.filter(item => account.rawRole === 'admin' || item.email === account.email);
-      let content = `<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email)} · ${esc(account.role)}</small></div></div>`;
+      const mine = orders;
+      let content = `<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email||account.phone)} · ${esc(account.role)}</small></div></div>`;
       if (account.rawRole === 'organizer' || account.rawRole === 'admin') content += `<h3 class="report-heading">Os seus eventos</h3>${own.length ? `<div class="dashboard-list">${own.map(item=>`<div class="dashboard-item"><strong>${esc(item.title)}</strong><span>${money(item.price)} · ${esc(item.place)}</span></div>`).join('')}</div>` : '<p class="form-note">Ainda não publicou eventos.</p>'}<button class="button button-dark" data-action="publish">Criar evento</button>`;
+      if(publicationPayments?.length){
+        content += `<h3 class="report-heading">Taxas de publicação</h3><div class="dashboard-list">${publicationPayments.map(payment=>{
+          const eventTitle=payment.events?.title||'Evento';
+          const details=`<strong>${esc(eventTitle)}</strong><span>${currency(payment.amount||2000)}</span><span>Estado: ${payment.status==='paid'?'Pago e publicado':'Aguardando confirmação'}</span><span>${payment.receipt_code?`Recibo: ${esc(payment.receipt_code)}`:'Referência: '+esc(payment.payment_reference||'—')}</span>`;
+          return payment.status==='paid'&&payment.receipt_code
+            ? `<button type="button" class="receipt-card paid" data-publication-receipt="${esc(payment.id)}">${details}<span class="receipt-status">✓ Pago — clicar para imprimir comprovativo</span></button>`
+            : `<div class="receipt-card pending">${details}<span class="receipt-status">● Comprovativo pendente</span></div>`;
+        }).join('')}</div>`;
+      }
       if (mine.length) content += `<h3 class="report-heading">Os seus pedidos e ingressos</h3><div class="dashboard-list">${mine.map(item=>{
         const methodLabel=paymentMethodLabel(item.paymentMethod);
         if(item.status==='paid'){
           return `<button type="button" class="receipt-card paid" data-download-pdf="${esc(item.id)}"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span>Ingresso digital: ${esc(item.digitalTicketCode||item.reference)}</span><span class="receipt-status">✓ Pago — clicar para baixar PDF</span></button>`;
         }
-        return `<button type="button" class="receipt-card pending" data-download-pdf="${esc(item.id)}"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span>${esc(methodLabel)}</span><span class="receipt-status">● Comprovativo pendente — clicar para baixar PDF</span></button>`;
+        if(item.status==='expired'){
+          return `<div class="receipt-card pending"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span class="receipt-status">Reserva expirada — os ingressos foram liberados. Crie um novo pedido para comprar.</span></div>`;
+        }
+        if(item.status!=='reserved'){
+          return `<div class="receipt-card pending"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span class="receipt-status">Pedido ${esc(item.status==='cancelled'?'cancelado':'encerrado')}</span></div>`;
+        }
+        return `<button type="button" class="receipt-card pending" data-download-pdf="${esc(item.id)}"><strong>${esc(item.eventTitle)}</strong><span>${item.quantity} ingresso(s) · ${esc(item.reference)}</span><span>${esc(methodLabel)}</span><span>Reserva válida até ${esc(formatDate(item.expiresAt))}</span><span class="receipt-status">● Comprovativo pendente — clicar para baixar PDF</span></button>`;
       }).join('')}</div>`;
       content += `<div class="form-actions"><button class="button button-outline" data-action="logout">Sair da conta</button></div>`;
       openModal('A sua conta', 'Dados e atividade guardados na plataforma.', content);
@@ -223,7 +270,7 @@
       const reserved = events.reduce((sum,row)=>sum+Number(row.tickets_reserved||0),0);
       const gross = events.reduce((sum,row)=>sum+Number(row.confirmed_gross||0),0);
       const reportRows = events.length ? events.map(row=>`<tr><td><strong>${esc(row.title)}</strong><small style="display:block;color:#68766d;margin-top:4px">${row.starts_at?formatDate(row.starts_at):'Data por definir'}</small></td><td>${row.tickets_sold}</td><td>${row.tickets_reserved}</td><td>${currency(row.confirmed_gross)}</td></tr>`).join('') : '<tr><td colspan="4">Ainda não publicou eventos.</td></tr>';
-      openModal('Painel do organizador','Vendas e reservas apenas dos seus eventos.',`<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.email)} · Organizador</small></div></div><div class="report-summary"><div class="metric"><small>Os meus eventos</small><strong>${events.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div></div><p class="form-note">O relatório apresenta totais. Os dados pessoais dos compradores não aparecem neste painel.</p><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Ingressos pagos</th><th>Reservas</th><th>Faturamento confirmado</th></tr></thead><tbody>${reportRows}</tbody></table></div><div class="form-actions"><button class="button button-outline" data-action="publish">Publicar evento</button><button class="button button-outline" data-action="logout">Sair da conta</button></div>`);
+      openModal('Painel do organizador','Vendas e reservas apenas dos seus eventos.',`<div class="account-summary"><div class="avatar">${esc(account.name.split(/\s+/).map(part=>part[0]).slice(0,2).join('').toUpperCase())}</div><div><strong>${esc(account.name)}</strong><small>${esc(account.phone)} · Organizador</small></div></div><div class="report-summary"><div class="metric"><small>Os meus eventos</small><strong>${events.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div></div><p class="form-note">O relatório apresenta totais. Os dados pessoais dos compradores não aparecem neste painel.</p><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Ingressos pagos</th><th>Reservas</th><th>Faturamento confirmado</th></tr></thead><tbody>${reportRows}</tbody></table></div><div class="form-actions"><button class="button button-outline" data-action="publish">Publicar evento</button><button class="button button-outline" data-action="logout">Sair da conta</button></div>`);
     } catch (error) { showError(error.message, 'Painel do organizador'); }
   }
   publishEvent = () => {
@@ -243,7 +290,7 @@
       <div class="field full"><label for="organizerPhoto">Foto de perfil do organizador</label><input id="organizerPhoto" name="organizer_photo" type="file" accept="image/jpeg,image/png,image/webp" ${account.profilePhotoPath ? '' : 'required'}><span class="help">Esta foto e o telefone aparecem no anúncio. O BI fica reservado à administração.</span>${account.profilePhotoUrl ? `<img src="${esc(account.profilePhotoUrl)}" alt="Foto atual do organizador" style="width:84px;height:84px;object-fit:cover;border-radius:50%;margin-top:8px">` : ''}</div>` : '';
     openModal('Publicar um evento', 'Preencha os dados do evento e as informações do organizador.', `<form data-form="event"><div class="form-grid">
       ${organizerFields}
-      <div class="field full"><label for="eventTitle">Nome do evento</label><input id="eventTitle" name="title" required maxlength="90"></div>
+      <div class="field full"><label for="eventTitle">Nome do evento</label><input id="eventTitle" name="title" required minlength="3" maxlength="90"></div>
       <div class="field"><label for="eventCategory">Categoria</label><select id="eventCategory" name="category"><option>Casamentos</option><option>Festas</option><option>Música</option><option>Cultura</option><option>Lifestyle</option></select></div>
       <div class="field"><label for="eventDate">Data e hora</label><input id="eventDate" name="date" type="datetime-local" required></div>
       <div class="field full"><label for="eventPlace">Local</label><input id="eventPlace" name="place" required maxlength="100"></div>
@@ -253,8 +300,8 @@
       <div class="field full"><label for="eventVideo">Vídeos do evento (até 2)</label><input id="eventVideo" name="videos" type="file" multiple accept="video/mp4,video/webm,video/quicktime"><span class="help">MP4, WEBM ou MOV, até 100 MB por vídeo.</span><div class="upload-gallery" id="eventVideoPreview"></div><span class="help" id="videoUploadMessage" aria-live="polite"></span></div>
       <div class="field full"><label for="eventDescription">Descrição</label><textarea id="eventDescription" name="description" maxlength="500"></textarea></div></div>
       <div class="field full"><label for="publicationPaymentMethod">Pagamento da publicação — 2 000 Kz</label><select id="publicationPaymentMethod" name="publication_payment_method" required><option value="multicaixa_express">Multicaixa Express</option><option value="referencia">Pagamento por referência</option><option value="transferencia">Transferência bancária</option><option value="dinheiro">Dinheiro no atendimento</option></select></div>
-      <div class="field full"><label for="publicationPaymentReference">Referência ou comprovativo do pagamento</label><input id="publicationPaymentReference" name="publication_payment_reference" maxlength="80" placeholder="Opcional agora, obrigatório para comprovação"></div>
-      <p class="form-note">Taxa obrigatória de publicação: 2 000 Kz. O evento não será publicado até o pagamento ser confirmado pela administração.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Solicitar publicação — 2 000 Kz</button></div></form>`);
+      <div class="field full"><label for="publicationPaymentReference">Referência ou número do comprovativo</label><input id="publicationPaymentReference" name="publication_payment_reference" maxlength="80" required placeholder="Informe a referência da transação ou do recibo"></div>
+      <p class="form-note">Pague 2 000 Kz e informe a referência do comprovativo. O evento ficará privado até a administração confirmar o pagamento. Depois da confirmação, poderá imprimir o recibo na sua conta.</p><div class="form-actions"><button type="button" class="button button-outline" data-close>Cancelar</button><button class="button button-dark" type="submit">Enviar comprovativo — 2 000 Kz</button></div></form>`);
     const videoInput = modalBody.querySelector('#eventVideo');
     videoInput?.addEventListener('change', () => {
       const allowed = ['video/mp4','video/webm','video/quicktime'];
@@ -352,11 +399,15 @@
   }
   async function saveEvent(data, eventId = null) {
     const old = eventId ? allEvents().find(item=>item.id===eventId) : null;
+    const title=(data.title||'').trim();
+    if(title.length<3||title.length>120)throw new Error('O nome do evento deve ter entre 3 e 120 caracteres.');
     if (!old && account.rawRole !== 'admin') {
-      if (!data.publication_payment_method) throw new Error('Pague a taxa de publicação de 2 000 Kz antes de publicar o evento.');
+      if (!data.publication_payment_method || !(data.publication_payment_reference||'').trim()) {
+        throw new Error('Pague 2 000 Kz antes de publicar o anúncio e informe a referência do comprovativo.');
+      }
     }
     const organizer = await saveOrganizerDetails(data);
-    const payload = { title:data.title.trim(), category:data.category, starts_at:new Date(data.date).toISOString(), venue:data.place.trim(),
+    const payload = { title, category:data.category, starts_at:new Date(data.date).toISOString(), venue:data.place.trim(),
       description:(data.description||'').trim(), ticket_price:Number(data.price), ticket_capacity:Number(data.quantity),
       status:old ? old.status : (account.rawRole==='admin'?'published':'draft'),
       organizer_name:old?old.organizerName||'':organizer.name, organizer_phone:old?old.organizerPhone||'':organizer.phone,
@@ -367,18 +418,27 @@
     const saved = rows?.[0];
     if (!saved) throw new Error('O evento não foi guardado. Confirme se a sua conta tem acesso de organizador.');
     if (account.rawRole !== 'admin') {
-      await request('/rest/v1/event_publication_payments',{
-        method:'POST',
-        headers:{Prefer:'return=representation'},
-        body:JSON.stringify({
-          event_id:saved.id,
-          organizer_id:account.id,
-          amount:2000,
-          payment_method:data.publication_payment_method||'',
-          payment_reference:(data.publication_payment_reference||'').trim()||null,
-          status:'pending'
-        })
-      });
+      try {
+        await request('/rest/v1/event_publication_payments',{
+          method:'POST',
+          headers:{Prefer:'return=representation'},
+          body:JSON.stringify({
+            event_id:saved.id,
+            organizer_id:account.id,
+            amount:2000,
+            payment_method:data.publication_payment_method,
+            payment_reference:data.publication_payment_reference.trim(),
+            status:'pending'
+          })
+        });
+      } catch (error) {
+        try {
+          await request(`/rest/v1/events?id=eq.${encodeURIComponent(saved.id)}`,{method:'DELETE'});
+        } catch (cleanupError) {
+          throw new Error(`${error.message} O rascunho foi mantido, mas não foi possível limpar o evento: ${cleanupError.message}`);
+        }
+        throw new Error(`${error.message} O evento não foi publicado; envie novamente o pedido de publicação.`);
+      }
     }
     await uploadImages(saved.id, pendingEventImages);
     await uploadEventVideos(saved.id, pendingEventVideos);
@@ -398,11 +458,12 @@
       openModal('Ingressos esgotados', event.title, '<p class="form-note">Todos os lugares deste evento já foram reservados ou vendidos.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>');
       return;
     }
-    const maximum = Math.min(20, remaining);
+    const maximum = Math.min(4, remaining);
     openModal('Comprar ingresso', `${event.title} · ${event.place}`, `<form data-form="checkout"><div class="form-grid">
-      <div class="field full"><label>E-mail do participante</label><input value="${esc(account?.email||'')}" disabled></div>
+      <div class="field full"><label>Conta do participante</label><input value="${esc(account?.email||account?.phone||'')}" disabled></div>
       <div class="field"><label for="ticketQty">Quantidade</label><select id="ticketQty" name="quantity">${Array.from({length: maximum}, (_, index) => index + 1).map(n=>`<option>${n}</option>`).join('')}</select></div>
       <div class="field"><label>Total estimado</label><input id="orderTotal" value="${money(event.price*1)}" disabled></div>
+      <p class="form-note full">Ao criar o pedido, os ingressos ficam reservados por 15 minutos. Limite de 4 ingressos por conta para este evento.</p>
       <div class="field full"><label for="paymentMethod">Método de pagamento</label><select id="paymentMethod" name="paymentMethod" required>
         <option value="multicaixa_express">Multicaixa Express</option>
         <option value="referencia">Pagamento por referência</option>
@@ -439,10 +500,12 @@
     const order = orders.find(item => item.id === orderId);
     if (!order) return;
     const paid = order.status === 'paid';
-    const title = paid ? 'COMPROVATIVO DE PAGAMENTO E INGRESSO DIGITAL' : 'COMPROVATIVO DE COMPRA - PAGAMENTO PENDENTE';
+    const expired = order.status === 'expired';
+    const cancelled = order.status === 'cancelled';
+    const title = paid ? 'COMPROVATIVO DE PAGAMENTO E INGRESSO DIGITAL' : expired ? 'COMPROVATIVO DE RESERVA EXPIRADA' : cancelled ? 'COMPROVATIVO DE PEDIDO CANCELADO' : 'COMPROVATIVO DE COMPRA - PAGAMENTO PENDENTE';
     const color = paid ? '#2d8a57' : '#d84b43';
-    const status = paid ? 'PAGO' : 'PENDENTE';
-    const ticketCode = paid ? (order.digitalTicketCode || order.reference) : 'O código será emitido após confirmação';
+    const status = paid ? 'PAGO' : expired ? 'RESERVA EXPIRADA' : cancelled ? 'CANCELADO' : 'PENDENTE';
+    const ticketCode = paid ? (order.digitalTicketCode || order.reference) : expired || cancelled ? 'Sem ingresso digital' : 'O código será emitido após confirmação';
     const pdfWindow = window.open('', '_blank');
     if (!pdfWindow) {
       showError('Permita pop-ups para baixar o comprovativo em PDF.');
@@ -450,7 +513,18 @@
     }
     pdfWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(order.reference)}</title><style>
       body{font-family:Arial,sans-serif;margin:40px;color:#192522}.sheet{max-width:720px;margin:auto;border:3px solid ${color};border-radius:14px;padding:28px}.header{border-bottom:1px solid #dfe5df;padding-bottom:18px}.header h1{font-size:22px;margin:0 0 8px}.status{display:inline-block;background:${color};color:white;padding:8px 12px;border-radius:7px;font-weight:bold}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:22px 0}.box{border:1px solid #dde5df;border-radius:8px;padding:14px}.box small{display:block;color:#687570;margin-bottom:5px}.code{text-align:center;font-size:24px;font-weight:bold;border:2px dashed ${color};border-radius:8px;padding:18px;margin:20px 0}.footer{font-size:11px;color:#687570;text-align:center;margin-top:24px}@media print{body{margin:0}.sheet{max-width:none;margin:0;border-width:3px}}
-    </style></head><body><div class="sheet"><div class="header"><h1>NEXUS EVENTOS</h1><div class="status">${status}</div></div><h2>${esc(title)}</h2><div class="grid"><div class="box"><small>Evento</small><strong>${esc(order.eventTitle)}</strong></div><div class="box"><small>Participante</small><strong>${esc(order.name||account?.name||'Participante')}</strong></div><div class="box"><small>Quantidade</small><strong>${order.quantity} ingresso(s)</strong></div><div class="box"><small>Total</small><strong>${currency(order.total)}</strong></div><div class="box"><small>Referência da compra</small><strong>${esc(order.reference)}</strong></div><div class="box"><small>Método</small><strong>${esc(paymentMethodLabel(order.paymentMethod))}</strong></div></div>${order.paymentReference?`<div class="box"><small>Referência ou comprovativo informado</small><strong>${esc(order.paymentReference)}</strong></div>`:''}<div class="code">${esc(ticketCode)}</div><div class="footer">${paid?'Apresente este comprovativo impresso ou no telemóvel na entrada.':'Não apresenta ingresso digital enquanto o pagamento estiver pendente.'}<br>Emitido pela plataforma NEXUS EVENTOS.</div></div><script>window.onload=()=>{window.print()};<\\/script></body></html>`);
+    </style></head><body><div class="sheet"><div class="header"><h1>NEXUS EVENTOS</h1><div class="status">${status}</div></div><h2>${esc(title)}</h2><div class="grid"><div class="box"><small>Evento</small><strong>${esc(order.eventTitle)}</strong></div><div class="box"><small>Participante</small><strong>${esc(order.name||account?.name||'Participante')}</strong></div><div class="box"><small>Quantidade</small><strong>${order.quantity} ingresso(s)</strong></div><div class="box"><small>Total</small><strong>${currency(order.total)}</strong></div><div class="box"><small>Referência da compra</small><strong>${esc(order.reference)}</strong></div><div class="box"><small>Método</small><strong>${esc(paymentMethodLabel(order.paymentMethod))}</strong></div></div>${order.paymentReference?`<div class="box"><small>Referência ou comprovativo informado</small><strong>${esc(order.paymentReference)}</strong></div>`:''}<div class="code">${esc(ticketCode)}</div><div class="footer">${paid?'Apresente este comprovativo impresso ou no telemóvel na entrada.':expired?'A reserva expirou e os ingressos foram liberados.':cancelled?'Este pedido foi cancelado.':'Não apresenta ingresso digital enquanto o pagamento estiver pendente.'}<br>Emitido pela plataforma NEXUS EVENTOS.</div></div><script>window.onload=()=>{window.print()};<\\/script></body></html>`);
+    pdfWindow.document.close();
+  }
+  function downloadPublicationReceipt(paymentId) {
+    const payment=publicationPayments.find(item=>item.id===paymentId);
+    if(!payment||payment.status!=='paid'||!payment.receipt_code)return;
+    const eventTitle=payment.events?.title||'Evento';
+    const pdfWindow=window.open('','_blank');
+    if(!pdfWindow){showError('Permita pop-ups para imprimir o comprovativo de publicação.');return;}
+    pdfWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(payment.receipt_code)}</title><style>
+      body{font-family:Arial,sans-serif;margin:40px;color:#192522}.sheet{max-width:720px;margin:auto;border:3px solid #2d8a57;border-radius:14px;padding:28px}.header{border-bottom:1px solid #dfe5df;padding-bottom:18px}.header h1{font-size:22px;margin:0 0 8px}.status{display:inline-block;background:#2d8a57;color:white;padding:8px 12px;border-radius:7px;font-weight:bold}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:22px 0}.box{border:1px solid #dde5df;border-radius:8px;padding:14px}.box small{display:block;color:#687570;margin-bottom:5px}.code{text-align:center;font-size:22px;font-weight:bold;border:2px dashed #2d8a57;border-radius:8px;padding:18px;margin:20px 0}.footer{font-size:11px;color:#687570;text-align:center;margin-top:24px}@media print{body{margin:0}.sheet{max-width:none;margin:0;border-width:3px}}
+    </style></head><body><div class="sheet"><div class="header"><h1>NEXUS EVENTOS</h1><div class="status">PAGO E PUBLICADO</div></div><h2>Comprovativo da taxa de publicação</h2><div class="grid"><div class="box"><small>Evento</small><strong>${esc(eventTitle)}</strong></div><div class="box"><small>Organizador</small><strong>${esc(account?.name||'Organizador')}</strong></div><div class="box"><small>Valor pago</small><strong>${currency(payment.amount)}</strong></div><div class="box"><small>Método de pagamento</small><strong>${esc(paymentMethodLabel(payment.payment_method))}</strong></div><div class="box"><small>Referência de pagamento</small><strong>${esc(payment.payment_reference||'—')}</strong></div><div class="box"><small>Data da confirmação</small><strong>${payment.paid_at?esc(formatDate(payment.paid_at)):'Confirmado pela administração'}</strong></div></div><div class="code">${esc(payment.receipt_code)}</div><div class="footer">Comprovativo de pagamento e publicação emitido pela NEXUS EVENTOS.</div></div><script>window.onload=()=>{window.print()};<\\/script></body></html>`);
     pdfWindow.document.close();
   }
   function showPaidTicket(orderId) {
@@ -491,7 +565,7 @@
         return `<tr><td><strong>${esc(row.title)}</strong></td><td>${esc(organizer?.full_name||'Organizador')}</td><td>${row.starts_at?esc(formatDate(row.starts_at)):'Sem data'}</td><td><div class="admin-actions"><button data-review-event="${esc(row.id)}" data-event-review-status="published">Publicar</button><button class="danger" data-review-event="${esc(row.id)}" data-event-review-status="cancelled">Rejeitar</button></div></td></tr>`;
       }).join(''):'<tr><td colspan="4">Não há atividades aguardando aprovação.</td></tr>';
       const rows=reports.length?reports.map(row=>`<tr><td><strong>${esc(row.title)}</strong></td><td>${row.tickets_sold}</td><td>${row.tickets_reserved}</td><td>${currency(row.confirmed_gross)}</td><td>${currency(row.reserved_gross)}</td><td>${currency(Number(row.confirmed_gross)*commissionRate/100)}</td><td>${currency(Number(row.reserved_gross)*commissionRate/100)}</td><td>${currency(Number(row.confirmed_gross)*(1-commissionRate/100))}</td><td>${esc(profileById.get(row.organizer_id)?.full_name||'—')}</td><td>${esc(biByOrganizer.get(row.organizer_id)||'—')}</td><td><div class="admin-actions"><button data-edit-event="${esc(row.event_id)}">Editar</button><button class="danger" data-delete-event="${esc(row.event_id)}">Cancelar</button></div></td></tr>`).join(''):'<tr><td colspan="10">Ainda não há eventos para gerir.</td></tr>';
-      const recent=orders.slice(0,30).map(order=>`<div class="dashboard-item"><div><strong>${esc(order.eventTitle)}</strong><span style="display:block;margin-top:4px">${esc(order.email)} · ${order.quantity} ingresso(s) · ${esc(order.reference)}</span></div>${order.status==='paid'?'<strong>Pago</strong>':order.status==='reserved'?`<button class="button button-dark" data-mark-paid="${esc(order.reference)}">Confirmar pagamento</button>`:esc(order.status)}</div>`).join('')||'<p class="form-note">Ainda não há reservas.</p>';
+      const recent=orders.slice(0,30).map(order=>`<div class="dashboard-item"><div><strong>${esc(order.eventTitle)}</strong><span style="display:block;margin-top:4px">${esc(order.name||order.email||'—')} · ${order.quantity} ingresso(s) · ${esc(order.reference)}</span></div>${order.status==='paid'?'<strong>Pago</strong>':order.status==='reserved'?`<button class="button button-dark" data-mark-paid="${esc(order.reference)}">Confirmar pagamento</button>`:esc(order.status==='expired'?'Expirada':order.status==='cancelled'?'Cancelada':order.status)}</div>`).join('')||'<p class="form-note">Ainda não há reservas.</p>';
       openModal('Painel de administração','Controlo central de contas, atividades, vendas e pagamentos.',`<div class="report-summary"><div class="metric"><small>Eventos</small><strong>${reports.length}</strong></div><div class="metric"><small>Ingressos pagos</small><strong>${sold}</strong></div><div class="metric"><small>Ingressos reservados</small><strong>${reserved}</strong></div><div class="metric"><small>Faturamento confirmado</small><strong>${currency(gross)}</strong></div><div class="metric"><small>Receita NEXUS</small><strong>${currency(nexus)}</strong></div></div><p class="report-note">Reservas não são pagamentos. Só marque uma reserva como paga após confirmar o recebimento. Pagamentos online ainda não estão integrados.</p><div class="commission-control"><div class="field"><label for="commissionRate">Comissão NEXUS (%)</label><input id="commissionRate" type="number" min="0" max="100" step="0.5" value="${commissionRate}"></div><button class="button button-dark" data-action="save-commission">Guardar comissão</button><button class="button button-outline" data-action="export-report">Baixar relatório CSV</button><button class="button button-outline" data-action="admin-new">Novo evento</button><button class="button button-outline" data-action="admin-logout">Sair</button></div><h3 class="report-heading">Cadastros de organizadores</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Organizador</th><th>Estado</th><th>BI</th><th>Decisão</th></tr></thead><tbody>${organizerRows}</tbody></table></div><h3 class="report-heading">Atividades aguardando aprovação</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Atividade</th><th>Organizador</th><th>Data</th><th>Decisão</th></tr></thead><tbody>${queueRows}</tbody></table></div><h3 class="report-heading">Relatório por evento</h3><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Evento</th><th>Pagos</th><th>Reservas</th><th>Faturamento</th><th>Valor reservado</th><th>NEXUS recebido</th><th>NEXUS estimado</th><th>Organizador</th><th>BI do organizador</th><th>Gerir</th></tr></thead><tbody>${rows}</tbody></table></div><h3 class="report-heading">Reservas recentes</h3><div class="reservation-list">${recent}</div>`);
     } catch (error) { showError(error.message, 'Painel administrativo'); }
   }
@@ -500,6 +574,7 @@
   confirmOrderPayment = reference => {
     if (account?.rawRole !== 'admin') return;
     const order=orders.find(item=>item.reference===reference); if(!order)return;
+    if(order.status!=='reserved'){showError('Esta reserva expirou ou já não está pendente.','Reserva indisponível');return;}
     openModal('Confirmar pagamento','Confirme apenas depois de verificar o recebimento.',`<p class="form-note">Marcar como pago: <strong>${esc(order.eventTitle)}</strong>, ${order.quantity} ingresso(s), total ${currency(order.total)}.<br>Método: ${esc(paymentMethodLabel(order.paymentMethod))}${order.paymentReference?` · Referência: ${esc(order.paymentReference)}`:''}</p><div class="form-actions"><button class="button button-outline" data-close>Cancelar</button><button class="button button-dark" data-confirm-paid="${esc(reference)}">Confirmar recebimento</button></div>`);
   };
   confirmDeleteEvent = id => {
@@ -574,6 +649,8 @@
     if(showTicket){event.preventDefault();event.stopImmediatePropagation();showPaidTicket(showTicket.dataset.showTicket);return;}
     const downloadPdf=event.target.closest('[data-download-pdf]');
     if(downloadPdf){event.preventDefault();event.stopImmediatePropagation();downloadOrderPdf(downloadPdf.dataset.downloadPdf);return;}
+    const publicationReceipt=event.target.closest('[data-publication-receipt]');
+    if(publicationReceipt){event.preventDefault();event.stopImmediatePropagation();downloadPublicationReceipt(publicationReceipt.dataset.publicationReceipt);return;}
     const toggleLike=event.target.closest('[data-toggle-event-like]');
     if(toggleLike){
       event.preventDefault();event.stopImmediatePropagation();
@@ -602,20 +679,32 @@
   }, true);
   document.addEventListener('submit', async event => {
     const form=event.target.closest('form[data-form]');if(!form)return;
-    const kind=form.dataset.form;if(!['register','login','password-recovery-request','password-update','event','edit-event','checkout','event-comment'].includes(kind))return;
+    const kind=form.dataset.form;if(!['register','login','password-recovery-request','phone-recovery-verify','password-update','event','edit-event','checkout','event-comment'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
     try{
       if(kind==='register'){
-        const email=data.email.trim().toLowerCase();
-        const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password:data.password,data:{full_name:data.name.trim(),phone:data.phone.trim(),role:data.role}})},false);
+        const name=data.name.trim();
+        const phone=normalizePhone(data.phone);
+        const metadata={full_name:name,phone,role:data.role};
+        const credentials={phone,password:data.password,data:metadata};
+        const result=await request('/auth/v1/signup',{method:'POST',body:JSON.stringify(credentials)},false);
+        if(Array.isArray(result.user?.identities)&&result.user.identities.length===0){
+          showError('Este nome e número de telefone já estão registados aqui. Entre na sua conta com este telefone.','Telefone já registado');
+          return;
+        }
         if(result.access_token){saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);authIntent=null;}
-        else openModal('Confirmação ainda ativa','A conta foi criada, mas o Supabase ainda exige confirmação por e-mail.',`<p class="form-note">Para entrar diretamente após o cadastro, o administrador precisa desativar “Confirm email” nas definições de autenticação do projeto Supabase.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
+        else openModal('Cadastro pendente','A autenticação não devolveu uma sessão.',`<p class="form-note">Confirme que a autenticação por telefone está ativa e que “Confirm phone” está desligado no Supabase.</p><div class="form-actions"><button class="button button-dark" data-close>Entendi</button></div>`);
       } else if(kind==='login'){
-        const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase(),password:data.password})},false);
+        const credentials={phone:normalizePhone(data.phone),password:data.password};
+        const result=await request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(credentials)},false);
         saveSession(result);await loadAccount();await loadEvents();modal.close();if(authIntent==='publish')publishEvent();else if(authIntent==='checkout'&&selectedEvent)openCheckoutForm(selectedEvent);else if(authIntent==='admin'){if(account?.rawRole==='admin')adminPanel();else organizerPanel();}authIntent=null;
       } else if(kind==='password-recovery-request'){
-        await request('/auth/v1/recover',{method:'POST',body:JSON.stringify({email:data.email.trim().toLowerCase()})},false);
-        openModal('Verifique o seu e-mail','Enviámos um link para criar uma nova palavra-passe.',`<p class="form-note">Abra o link neste dispositivo e escolha a nova palavra-passe.</p><div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
+        const phone=normalizePhone(data.phone);
+        await request('/auth/v1/recover',{method:'POST',body:JSON.stringify({phone})},false);
+        openPhoneRecoveryVerification(phone);
+      } else if(kind==='phone-recovery-verify'){
+        const result=await request('/auth/v1/verify',{method:'POST',body:JSON.stringify({phone:data.phone,token:data.token.trim(),type:'recovery'})},false);
+        saveSession(result);openPasswordResetForm();
       } else if(kind==='password-update'){
         await request('/auth/v1/user',{method:'PUT',body:JSON.stringify({password:data.password})});
         await loadAccount();openModal('Palavra-passe atualizada','A sua conta já pode ser usada normalmente.',`<div class="form-actions"><button class="button button-dark" data-close>Concluir</button></div>`);
@@ -628,17 +717,30 @@
       } else if(kind==='checkout'){
         if(!account||!selectedEvent)throw new Error('Entre na sua conta antes de reservar.');
         const quantity=Number(data.quantity||1);
-        const result=await request('/rest/v1/ticket_orders',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({
-          event_id:selectedEvent.id,buyer_id:account.id,buyer_email:account.email,buyer_name:account.name,
-          quantity,unit_price:selectedEvent.price,payment_method:data.paymentMethod,payment_reference:(data.paymentProof||'').trim()||null
+        const result=await request('/rest/v1/rpc/create_ticket_order',{method:'POST',body:JSON.stringify({
+          p_event_id:selectedEvent.id,p_quantity:quantity,p_payment_method:data.paymentMethod,
+          p_payment_reference:(data.paymentProof||'').trim()||null
         })});
-        const order=result?.[0];if(!order)throw new Error('A reserva não foi criada.');
+        const order=Array.isArray(result)?result[0]:result;if(!order)throw new Error('A reserva não foi criada.');
         const method=paymentMethodLabel(data.paymentMethod);
-        orders=[{id:order.id,reference:order.reference,eventId:selectedEvent.id,eventTitle:selectedEvent.title,email:account.email,name:account.name,quantity,total:Number(order.total),status:order.status,paymentMethod:data.paymentMethod,paymentReference:(data.paymentProof||'').trim()},...orders];
+        orders=[{id:order.id,reference:order.reference,eventId:selectedEvent.id,eventTitle:selectedEvent.title,email:account.email||account.phone,name:account.name,quantity,total:Number(order.total),status:order.status,expiresAt:order.expires_at,paymentMethod:data.paymentMethod,paymentReference:(data.paymentProof||'').trim()},...orders];
         modal.close();
-        openModal('Pedido de compra registado','Guarde este comprovativo até confirmar o pagamento.',`<div class="success-box"><svg class="icon"><use href="#i-ticket"/></svg><h3>Pedido ${esc(order.reference)}</h3><p>${esc(selectedEvent.title)}<br>${quantity} ingresso(s) · ${currency(order.total)}</p></div><p class="form-note"><strong>Método:</strong> ${esc(method)}<br><strong>Estado:</strong> Aguardando confirmação de pagamento<br><strong>Ingresso digital:</strong> será liberado somente após o pagamento ser confirmado.</p><div class="form-actions"><button class="button button-outline" data-close>Fechar</button><button class="button button-dark" data-print-receipt="true">Imprimir comprovativo</button></div>`);
+        openModal('Pedido de compra registado','Guarde este comprovativo até confirmar o pagamento.',`<div class="success-box"><svg class="icon"><use href="#i-ticket"/></svg><h3>Pedido ${esc(order.reference)}</h3><p>${esc(selectedEvent.title)}<br>${quantity} ingresso(s) · ${currency(order.total)}</p></div><p class="form-note"><strong>Método:</strong> ${esc(method)}<br><strong>Estado:</strong> Aguardando confirmação de pagamento<br><strong>Reserva válida até:</strong> ${esc(formatDate(order.expires_at))}<br><strong>Ingresso digital:</strong> será liberado somente após o pagamento ser confirmado.</p><div class="form-actions"><button class="button button-outline" data-close>Fechar</button><button class="button button-dark" data-print-receipt="true">Imprimir comprovativo</button></div>`);
       }
-    }catch(error){showError(error.message);}
+    }catch(error){
+      const errorMessage=error.message||'Ocorreu um erro inesperado.';
+      const duplicatePhone=kind==='register'&&/already registered|already exists|duplicate/i.test(errorMessage);
+      const phoneAuthUnavailable=['register','login','password-recovery-request','phone-recovery-verify'].includes(kind)&&/phone.*(?:disabled|not enabled)|(?:disabled|not enabled).*phone/i.test(errorMessage);
+      const inventoryUnavailable=kind==='checkout'&&/not enough tickets remain|pode (?:reservar|comprar) no máximo/i.test(errorMessage);
+      const message=duplicatePhone
+        ? 'Este nome e número de telefone já estão registados aqui. Entre na sua conta com este telefone.'
+        : phoneAuthUnavailable
+          ? 'A autenticação por telefone ainda não está ativa no Supabase. Configure o provedor SMS, ative Phone e desligue Confirm phone.'
+          : inventoryUnavailable
+            ? 'A quantidade pedida já não está disponível. Atualize os eventos e tente novamente.'
+            : errorMessage;
+      showError(message,duplicatePhone?'Telefone já registado':undefined);
+    }
   }, true);
   async function initialize(){
     try{const callbackType=await restoreAuthCallback();if(session){await loadAccount();}await loadEvents();if(account)await loadOrders();if(callbackType==='recovery')openPasswordResetForm();}
